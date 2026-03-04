@@ -1,718 +1,841 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+// app/live/page.tsx
+// ─────────────────────────────────────────────────────────────────────────────
+// FOW Live Pair Page — wired to Supabase
+//
+// FLOW:
+//   Admin view  → sees lobby + participant list + Generate button
+//   Guest view  → scans QR / enters name → joins lobby → waits for reveal
+//   On Generate → status flips to 'revealed', ALL phones update simultaneously
+//   Results     → every player sees full pair list + their own pair highlighted
+// ─────────────────────────────────────────────────────────────────────────────
+
+import { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Crown, Sword, Users, Zap, Star, Shield,
-  Trophy, Copy, Check, ArrowRight, LogIn,
+  Crown, Sword, Users, Zap, QrCode,
+  RefreshCw, Copy, Check, Star, Flame,
 } from "lucide-react";
+import { supabase, createSession, getSession, getParticipants,
+  addParticipant, removeParticipant, generateAndSavePairs,
+  updateSessionStatus, getPairs, getAgatambyi, addReaction,
+  genId,
+  type DBSession, type DBParticipant, type DBPair, type DBAgatambyi, type Role,
+} from "@/lib/supabase";
 
-// ─── Types ──────────────────────────────────────────────────────────────────
-type AppView = "home" | "host-lobby" | "guest-join" | "guest-lobby" | "revealing" | "revealed";
-type HeroRole = "king" | "queen";
-
-interface Hero { id: string; name: string; role: HeroRole; }
-interface Pair  { id: string; king: string; queen: string; }
-interface Reaction { id: string; emoji: string; x: number; }
-
-// ─── Constants ───────────────────────────────────────────────────────────────
-const SESSION_CODE   = "WK12";
-const REACTION_EMOJIS = ["👑", "❤️", "🔥", "⚔️", "✨", "🎉"];
-const FAKE_JOINERS: Hero[] = [
-  { id: "f1", name: "Kalisa",    role: "queen" },
-  { id: "f2", name: "Mugisha",   role: "king"  },
-  { id: "f3", name: "Uwera",     role: "queen" },
-  { id: "f4", name: "Nshimiye",  role: "king"  },
-  { id: "f5", name: "Ingabire",  role: "queen" },
-  { id: "f6", name: "Habimana",  role: "king"  },
-];
-
-// ─── Utility: generate all pairs ────────────────────────────────────────────
-function generateAllPairs(heroes: Hero[]): Pair[] {
-  const kings  = [...heroes.filter((h) => h.role === "king" )].sort(() => Math.random() - 0.5);
-  const queens = [...heroes.filter((h) => h.role === "queen")].sort(() => Math.random() - 0.5);
-  const count  = Math.min(kings.length, queens.length);
-  return Array.from({ length: count }, (_, i) => ({
-    id:    Math.random().toString(36).slice(2) + Date.now().toString(36) + i,
-    king:  kings[i].name,
-    queen: queens[i].name,
-  }));
-}
-
-// ─── Floating Reaction ───────────────────────────────────────────────────────
-const FloatingReaction = ({ reaction, onDone }: { reaction: Reaction; onDone: () => void }) => (
-  <motion.div
-    initial={{ opacity: 1, y: 0, scale: 0.6 }}
-    animate={{ opacity: 0, y: -100, scale: 1.5 }}
-    transition={{ duration: 1.8, ease: "easeOut" }}
-    onAnimationComplete={onDone}
-    className="absolute bottom-4 pointer-events-none text-2xl select-none z-10"
-    style={{ left: `${reaction.x}%` }}
-  >{reaction.emoji}</motion.div>
+// ── QR code (lightweight inline SVG generator via api.qrserver.com) ───────────
+const QRCode = ({ value, size = 160 }: { value: string; size?: number }) => (
+  // eslint-disable-next-line @next/next/no-img-element
+  <img
+    src={`https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(value)}&bgcolor=0d0d10&color=ffffff&qzone=1`}
+    alt="QR Code"
+    width={size}
+    height={size}
+    className="rounded-2xl"
+  />
 );
 
-// ─── QR Visual ───────────────────────────────────────────────────────────────
-const QRVisual = ({ code }: { code: string }) => (
-  <div className="relative w-40 h-40 mx-auto">
-    {["top-0 left-0","top-0 right-0","bottom-0 left-0","bottom-0 right-0"].map((pos, i) => (
-      <motion.div key={i} animate={{ opacity:[0.4,1,0.4] }} transition={{ duration:2, repeat:Infinity, delay:i*0.3 }}
-        className={`absolute w-6 h-6 ${pos}`}
-        style={{
-          borderTop:    i < 2      ? "2px solid #ef4444" : "none",
-          borderBottom: i >= 2     ? "2px solid #ef4444" : "none",
-          borderLeft:   i % 2 ===0 ? "2px solid #ef4444" : "none",
-          borderRight:  i % 2 ===1 ? "2px solid #ef4444" : "none",
-        }} />
-    ))}
-    <div className="absolute inset-3 bg-white/5 rounded-lg border border-white/10 grid grid-cols-7 grid-rows-7 gap-0.5 p-1">
-      {Array.from({ length:49 }).map((_,i) => {
-        const filled = [0,1,2,3,4,5,6,7,13,14,20,21,27,28,34,35,41,42,43,44,45,46,48,10,12,15,25,36,38].includes(i);
-        return <div key={i} className={`rounded-[1px] ${filled?"bg-white/80":"bg-transparent"}`}/>;
-      })}
-    </div>
-    <div className="absolute inset-0 flex items-center justify-center">
-      <div className="w-8 h-8 rounded-lg bg-red-500 flex items-center justify-center shadow-lg shadow-red-500/50">
-        <Crown className="w-4 h-4 text-white"/>
-      </div>
-    </div>
-    <motion.div animate={{ top:["15%","85%","15%"] }} transition={{ duration:2.5, repeat:Infinity, ease:"easeInOut" }}
-      className="absolute left-3 right-3 h-px bg-gradient-to-r from-transparent via-red-400 to-transparent"/>
-    <p className="absolute -bottom-7 left-1/2 -translate-x-1/2 text-xs font-black font-mono tracking-[0.3em] text-white/50 whitespace-nowrap">{code}</p>
-  </div>
-);
+// ── Reaction emojis ────────────────────────────────────────────────────────────
+const REACTION_EMOJIS = ["❤️", "🔥", "👑", "⚔️", "🎉", "😍"];
 
-// ─── Hero Chip ───────────────────────────────────────────────────────────────
-const HeroChip = ({ hero, index }: { hero: Hero; index: number }) => (
-  <motion.div initial={{ opacity:0, scale:0.7, y:8 }} animate={{ opacity:1, scale:1, y:0 }}
-    transition={{ delay:index*0.07, type:"spring" }}
-    className={`flex items-center gap-2 px-3 py-1.5 rounded-full border text-xs font-semibold
-                ${hero.role==="king"?"bg-yellow-400/10 border-yellow-400/25 text-yellow-300":"bg-rose-400/10 border-rose-400/25 text-rose-300"}`}>
-    <span>{hero.role==="king"?"⚔️":"👑"}</span>
-    <span>{hero.name}</span>
-  </motion.div>
-);
+// ── Role colors ────────────────────────────────────────────────────────────────
+const KING_STYLE  = { border: "border-yellow-400/40", bg: "bg-yellow-400/10", text: "text-yellow-300", glow: "rgba(250,204,21,0.3)"  };
+const QUEEN_STYLE = { border: "border-rose-400/40",   bg: "bg-rose-400/10",   text: "text-rose-300",   glow: "rgba(251,113,133,0.3)" };
+const roleStyle   = (role: string) => role === "king" ? KING_STYLE : QUEEN_STYLE;
 
-// ─── Stats Row ───────────────────────────────────────────────────────────────
-const StatsRow = ({ total, kings, queens }: { total:number; kings:number; queens:number }) => (
-  <div className="grid grid-cols-3 gap-3">
-    {[
-      { label:"Total",  value:total,  icon:"🧙", color:"text-white"      },
-      { label:"Kings",  value:kings,  icon:"⚔️", color:"text-yellow-300" },
-      { label:"Queens", value:queens, icon:"👑", color:"text-rose-300"   },
-    ].map((s) => (
-      <div key={s.label} className="flex flex-col items-center gap-1 p-3 rounded-2xl bg-white/5 border border-white/8">
-        <span className="text-lg">{s.icon}</span>
-        <motion.span key={s.value} initial={{ scale:1.4 }} animate={{ scale:1 }} className={`text-2xl font-black ${s.color}`}>{s.value}</motion.span>
-        <span className="text-[10px] text-white/30 tracking-widest uppercase">{s.label}</span>
-      </div>
-    ))}
-  </div>
-);
-
-// ─── Lobby List ──────────────────────────────────────────────────────────────
-const LobbyList = ({ heroes }: { heroes: Hero[] }) => (
-  <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
-    <p className="text-[10px] text-white/30 font-mono tracking-widest uppercase mb-3 flex items-center gap-2">
-      <Users className="w-3 h-3"/> Heroes in lobby
-    </p>
-    <div className="flex flex-wrap gap-2">
-      <AnimatePresence>
-        {heroes.map((h,i) => <HeroChip key={h.id} hero={h} index={i}/>)}
-      </AnimatePresence>
-    </div>
-  </div>
-);
-
-// ─── Big Featured Pair Card ──────────────────────────────────────────────────
-const FeaturedPairCard = ({ pair, isYours }: { pair: Pair; isYours: boolean }) => (
-  <motion.div initial={{ opacity:0, y:30, scale:0.92 }} animate={{ opacity:1, y:0, scale:1 }}
-    transition={{ duration:0.6, type:"spring", bounce:0.3 }}
-    className="relative w-full rounded-3xl overflow-hidden">
-    {isYours && (
-      <motion.div initial={{ opacity:0, y:-10 }} animate={{ opacity:1, y:0 }} transition={{ delay:0.3 }}
-        className="absolute top-3 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1.5
-                   px-3 py-1 rounded-full bg-blue-500/90 backdrop-blur-sm border border-blue-400/50 shadow-lg shadow-blue-500/30">
-        <span className="text-[10px] font-black text-white tracking-widest uppercase">Your Pair ✦</span>
-      </motion.div>
-    )}
-    <div className={`relative p-6 pt-10 rounded-3xl border-2
-                     ${isYours
-                       ?"bg-gradient-to-br from-yellow-900/30 via-[#1a1208] to-rose-900/30 border-yellow-400/40"
-                       :"bg-gradient-to-br from-yellow-900/20 via-[#141210] to-rose-900/20 border-yellow-400/25"}`}
-      style={isYours?{boxShadow:"0 0 60px rgba(250,204,21,0.12), 0 0 30px rgba(251,113,133,0.08)"}:{}}>
-      {/* Week badge */}
-      <div className="flex items-center gap-3 mb-6">
-        <div className="flex-1 h-px bg-gradient-to-r from-transparent to-yellow-400/30"/>
-        <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/8 border border-white/12">
-          <Trophy className="w-3.5 h-3.5 text-yellow-400"/>
-          <span className="text-[10px] font-mono text-yellow-400 tracking-widest uppercase font-bold">Week 12</span>
-        </div>
-        <div className="flex-1 h-px bg-gradient-to-l from-transparent to-rose-400/30"/>
-      </div>
-      {/* Cards row */}
-      <div className="flex items-center justify-center gap-4 sm:gap-6">
-        {/* King */}
-        <motion.div initial={{ opacity:0, scale:0.5, rotateY:90 }} animate={{ opacity:1, scale:1, rotateY:0 }}
-          transition={{ delay:0.15, duration:0.65, type:"spring", bounce:0.35 }}
-          className="relative flex flex-col items-center flex-1">
-          <motion.div animate={{ scale:[1,1.12,1], opacity:[0.25,0.55,0.25] }} transition={{ duration:2.5, repeat:Infinity }}
-            className="absolute inset-0 rounded-3xl blur-2xl -z-10 bg-yellow-400/30"/>
-          <div className="w-full max-w-[160px] rounded-2xl border-2 border-yellow-400/40 p-4 flex flex-col items-center gap-2.5
-                          bg-gradient-to-b from-yellow-400/15 to-yellow-900/10"
-            style={{ boxShadow:"0 0 30px rgba(250,204,21,0.18)" }}>
-            <div className="w-14 h-14 rounded-xl bg-yellow-400/20 flex items-center justify-center text-3xl">⚔️</div>
-            <div className="text-center">
-              <p className="text-yellow-300 font-black text-base tracking-tight">{pair.king}</p>
-              <p className="text-[9px] text-white/40 font-mono tracking-widest uppercase mt-0.5">King of the Week</p>
-            </div>
-            <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-yellow-400/15 text-yellow-400 text-[10px] font-bold">
-              <Zap className="w-2.5 h-2.5"/>+500 XP
-            </div>
-          </div>
-        </motion.div>
-        {/* Heart */}
-        <motion.div initial={{ scale:0, opacity:0 }} animate={{ scale:1, opacity:1 }}
-          transition={{ delay:0.6, type:"spring" }} className="flex flex-col items-center gap-1 shrink-0">
-          <motion.div animate={{ scale:[1,1.35,1] }} transition={{ duration:1.4, repeat:Infinity }} className="text-xl">❤️</motion.div>
-          <div className="w-px h-6 bg-gradient-to-b from-yellow-400/30 to-rose-400/30"/>
-          <Shield className="w-3.5 h-3.5 text-white/20"/>
-        </motion.div>
-        {/* Queen */}
-        <motion.div initial={{ opacity:0, scale:0.5, rotateY:-90 }} animate={{ opacity:1, scale:1, rotateY:0 }}
-          transition={{ delay:0.3, duration:0.65, type:"spring", bounce:0.35 }}
-          className="relative flex flex-col items-center flex-1">
-          <motion.div animate={{ scale:[1,1.12,1], opacity:[0.25,0.55,0.25] }} transition={{ duration:2.5, repeat:Infinity, delay:0.4 }}
-            className="absolute inset-0 rounded-3xl blur-2xl -z-10 bg-rose-400/30"/>
-          <div className="w-full max-w-[160px] rounded-2xl border-2 border-rose-400/40 p-4 flex flex-col items-center gap-2.5
-                          bg-gradient-to-b from-rose-400/15 to-rose-900/10"
-            style={{ boxShadow:"0 0 30px rgba(251,113,133,0.18)" }}>
-            <div className="w-14 h-14 rounded-xl bg-rose-400/20 flex items-center justify-center text-3xl">👑</div>
-            <div className="text-center">
-              <p className="text-rose-300 font-black text-base tracking-tight">{pair.queen}</p>
-              <p className="text-[9px] text-white/40 font-mono tracking-widest uppercase mt-0.5">Queen of the Week</p>
-            </div>
-            <div className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-400/15 text-rose-400 text-[10px] font-bold">
-              <Zap className="w-2.5 h-2.5"/>+500 XP
-            </div>
-          </div>
-        </motion.div>
-      </div>
-    </div>
-  </motion.div>
-);
-
-// ─── Small Pair Row ──────────────────────────────────────────────────────────
-const SmallPairRow = ({ pair, index, highlight }: { pair: Pair; index: number; highlight: boolean }) => (
-  <motion.div initial={{ opacity:0, x:-20 }} animate={{ opacity:1, x:0 }}
-    transition={{ delay:0.1+index*0.06, type:"spring" }}
-    className={`relative flex items-center gap-3 p-3 rounded-2xl border transition-all
-                ${highlight
-                  ?"bg-blue-500/8 border-blue-500/25 hover:border-blue-500/40"
-                  :"bg-white/5 border-white/8 hover:bg-white/8 hover:border-white/15"}`}>
-    {highlight && <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 h-5 rounded-full bg-blue-400"/>}
-    <div className="w-7 h-7 rounded-lg bg-white/8 flex items-center justify-center text-[11px] font-mono text-white/30 shrink-0">
-      {String(index+1).padStart(2,"0")}
-    </div>
-    <div className="flex items-center gap-1.5 flex-1 min-w-0">
-      <div className="w-6 h-6 rounded-lg bg-yellow-400/15 flex items-center justify-center text-sm shrink-0">⚔️</div>
-      <p className="text-yellow-300 font-semibold text-sm truncate">{pair.king}</p>
-    </div>
-    <div className="flex items-center gap-1 shrink-0 px-1">
-      <div className="w-3 h-px bg-yellow-400/30"/>
-      <span className="text-xs">❤️</span>
-      <div className="w-3 h-px bg-rose-400/30"/>
-    </div>
-    <div className="flex items-center gap-1.5 flex-1 min-w-0 justify-end">
-      <p className="text-rose-300 font-semibold text-sm truncate text-right">{pair.queen}</p>
-      <div className="w-6 h-6 rounded-lg bg-rose-400/15 flex items-center justify-center text-sm shrink-0">👑</div>
-    </div>
-    {highlight && (
-      <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-blue-500/20 text-blue-400 font-mono font-bold shrink-0">YOU</span>
-    )}
-  </motion.div>
-);
-
-// ─── Main Page ───────────────────────────────────────────────────────────────
-export default function LivePairPage() {
-  const [view,       setView      ] = useState<AppView>("home");
-  const [heroes,     setHeroes    ] = useState<Hero[]>([]);
-  const [allPairs,   setAllPairs  ] = useState<Pair[]>([]);
-  const [isHost,     setIsHost    ] = useState(false);
-
-  // Guest form
-  const [guestName, setGuestName] = useState("");
-  const [guestRole, setGuestRole] = useState<HeroRole | null>(null);
-  const [joinCode,  setJoinCode  ] = useState("");
-  const [formError, setFormError ] = useState("");
-
-  // Reactions
-  const [reactions,      setReactions     ] = useState<Reaction[]>([]);
-  const [reactionCounts, setReactionCounts] = useState<Record<string,number>>({
-    "❤️":12, "🔥":8, "👑":19, "⚔️":5,
-  });
-
-  // Misc
-  const [featuredPair, setFeaturedPair] = useState<Pair | null>(null);
-  const [copied,       setCopied      ] = useState(false);
-  const [confetti,     setConfetti    ] = useState(false);
-  const joinIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Simulate others joining
-  useEffect(() => {
-    if (view !== "host-lobby" && view !== "guest-lobby") return;
-    let i = 0;
-    joinIntervalRef.current = setInterval(() => {
-      if (i < FAKE_JOINERS.length) {
-        const joiner = FAKE_JOINERS[i];
-        setHeroes((prev) => prev.find((h) => h.id === joiner.id) ? prev : [...prev, joiner]);
-        i++;
-      } else clearInterval(joinIntervalRef.current!);
-    }, 1100);
-    return () => { if (joinIntervalRef.current) clearInterval(joinIntervalRef.current!); };
-  }, [view]);
-
-  // Auto-reactions after reveal
-  useEffect(() => {
-    if (view !== "revealed") return;
-    const t = setInterval(() => {
-      const emoji = REACTION_EMOJIS[Math.floor(Math.random() * REACTION_EMOJIS.length)];
-      const id    = Math.random().toString(36).slice(2) + Date.now().toString(36);
-      setReactions((prev) => [...prev.slice(-10), { id, emoji, x: 5 + Math.random() * 85 }]);
-      setReactionCounts((prev) => ({ ...prev, [emoji]: (prev[emoji] || 0) + 1 }));
-    }, 550);
-    return () => clearInterval(t);
-  }, [view]);
-
-  // ── Safe hero list (no undefined) ──────────────────────────────────────────
-  const safeHeroes  = heroes.filter((h) => h && typeof h.role === "string");
-  const kingCount   = safeHeroes.filter((h) => h.role === "king" ).length;
-  const queenCount  = safeHeroes.filter((h) => h.role === "queen").length;
-  const canStart    = safeHeroes.length >= 2 && kingCount >= 1 && queenCount >= 1;
-
-  // ── Handlers ───────────────────────────────────────────────────────────────
-  const handleHostSession = () => {
-    setIsHost(true); setHeroes([]); setAllPairs([]); setFeaturedPair(null);
-    setView("host-lobby");
-  };
-
-  const handleGuestCodeSubmit = () => {
-    if (!joinCode.trim())                                      { setFormError("Enter the session code!"); return; }
-    if (joinCode.trim().toUpperCase() !== SESSION_CODE)        { setFormError("Invalid code — try WK12 for demo!"); return; }
-    setFormError(""); setView("guest-join");
-  };
-
-  const handleGuestEnterLobby = () => {
-    if (!guestName.trim()) { setFormError("Enter your hero name!"); return; }
-    if (!guestRole)         { setFormError("Choose King or Queen!"); return; }
-    setFormError("");
-    const me: Hero = { id: "me-" + Date.now().toString(36), name: guestName.trim(), role: guestRole };
-    setHeroes([me]); setIsHost(false); setView("guest-lobby");
-  };
-
-  // ── START PAIRING — generates ALL pairs ────────────────────────────────────
-  const handleStartPairing = () => {
-    setView("revealing");
-    setTimeout(() => {
-      const pairs = generateAllPairs(safeHeroes);
-
-      // For guests: find the pair containing their name
-      const myName = guestName.trim();
-      const myPair = pairs.find(
-        (p) => p.king === myName || p.queen === myName
-      ) ?? pairs[0];                                          // fallback to first
-
-      setAllPairs(pairs);
-      setFeaturedPair(myPair);
-      setView("revealed");
-      setConfetti(true);
-      setTimeout(() => setConfetti(false), 4000);
-    }, 3000);
-  };
-
-  const handleReact = (emoji: string) => {
-    const id = Math.random().toString(36).slice(2) + Date.now().toString(36);
-    setReactions((prev) => [...prev.slice(-10), { id, emoji, x: 5 + Math.random() * 85 }]);
-    setReactionCounts((prev) => ({ ...prev, [emoji]: (prev[emoji] || 0) + 1 }));
-  };
-
-  const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text).catch(() => {});
-    setCopied(true); setTimeout(() => setCopied(false), 2000);
-  };
-
-  const handleReset = () => {
-    setView("home"); setHeroes([]); setAllPairs([]); setFeaturedPair(null);
-    setGuestName(""); setGuestRole(null); setJoinCode(""); setFormError("");
-  };
-
-  // ── Shared BG ──────────────────────────────────────────────────────────────
-  const Bg = () => (
-    <div className="fixed inset-0 pointer-events-none">
-      <div className="absolute top-0 left-1/4 w-[500px] h-[500px] bg-red-900/15 rounded-full blur-[140px]"/>
-      <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-yellow-900/10 rounded-full blur-[120px]"/>
-      <div className="absolute inset-0 opacity-[0.025]"
-        style={{ backgroundImage:"linear-gradient(rgba(255,255,255,0.5) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.5) 1px,transparent 1px)", backgroundSize:"40px 40px" }}/>
-    </div>
+// ── Toast ──────────────────────────────────────────────────────────────────────
+const Toast = ({ msg, type, onDone }: { msg: string; type: "ok"|"err"; onDone: () => void }) => {
+  useEffect(() => { const t = setTimeout(onDone, 2500); return () => clearTimeout(t); }, [onDone]);
+  return (
+    <motion.div initial={{ opacity:0, y:30 }} animate={{ opacity:1, y:0 }} exit={{ opacity:0, y:20 }}
+      className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-50 px-5 py-3 rounded-2xl border text-sm font-semibold
+                  backdrop-blur-sm flex items-center gap-2 shadow-2xl
+                  ${type==="ok" ? "bg-green-500/20 border-green-500/40 text-green-300" : "bg-red-500/20 border-red-500/40 text-red-300"}`}>
+      {type==="ok" ? <Check className="w-4 h-4" /> : <Zap className="w-4 h-4" />}
+      {msg}
+    </motion.div>
   );
+};
+
+// ── Floating emoji burst (reaction animation) ─────────────────────────────────
+const EmojiFloat = ({ emoji, id, onDone }: { emoji:string; id:string; onDone:()=>void }) => {
+  // Each float gets its own fixed random values so they don't re-randomise on re-render
+  const [props] = useState(() => ({
+    left:    15 + Math.random() * 70,       // 15–85vw
+    drift:   (Math.random() - 0.5) * 80,    // horizontal wobble ±40px
+    size:    2.2 + Math.random() * 1.4,     // 2.2–3.6rem
+    duration:3.5 + Math.random() * 1.5,     // 3.5–5s
+  }));
+
+  // Remove from DOM after animation completes
+  useEffect(() => {
+    const t = setTimeout(onDone, (props.duration + 0.3) * 1000);
+    return () => clearTimeout(t);
+  }, [onDone, props.duration]);
 
   return (
-    <div className="min-h-screen bg-[#0d0d10] text-white overflow-x-hidden">
-      <Bg/>
+    <motion.div
+      initial={{ opacity: 1, y: 0, x: 0, scale: 0.6, rotate: 0 }}
+      animate={{
+        opacity: [1, 1, 1, 0.6, 0],
+        y:       -window.innerHeight * 0.75,   // rise 75% of screen height
+        x:       [0, props.drift * 0.4, props.drift, props.drift * 0.6, 0],
+        scale:   [0.6, 1.3, 1.1, 1.0, 0.8],
+        rotate:  [0, -12, 10, -6, 0],
+      }}
+      transition={{ duration: props.duration, ease: "easeOut" }}
+      className="fixed bottom-24 pointer-events-none z-50 select-none"
+      style={{ left: `${props.left}vw`, fontSize: `${props.size}rem`, lineHeight: 1 }}
+    >
+      {emoji}
+    </motion.div>
+  );
+};
 
-      {/* Confetti */}
+// ── Pair card (results screen) ─────────────────────────────────────────────────
+const PairCard = ({
+  pair, index, myName,
+}: { pair: DBPair; index: number; myName: string }) => {
+  const isMyPair = myName &&
+    (pair.member_a_name.toLowerCase() === myName.toLowerCase() ||
+     pair.member_b_name.toLowerCase() === myName.toLowerCase());
+  const isKQ = pair.pair_type === "king-queen";
+
+  return (
+    <motion.div
+      initial={{ opacity:0, y:20, scale:0.95 }}
+      animate={{ opacity:1, y:0, scale:1 }}
+      transition={{ delay: index * 0.07, type:"spring" }}
+      className={`flex items-center gap-3 p-4 rounded-2xl border transition-all
+                  ${isMyPair
+                    ? "border-blue-400/50 bg-blue-400/10 shadow-lg shadow-blue-400/15"
+                    : "border-white/10 bg-white/5"}`}
+    >
+      {/* Rank */}
+      <div className="w-7 h-7 rounded-lg bg-white/8 flex items-center justify-center text-[11px] font-mono text-white/30 shrink-0">
+        {String(index+1).padStart(2,"0")}
+      </div>
+
+      {/* Member A */}
+      <div className="flex items-center gap-2 flex-1 min-w-0">
+        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm shrink-0
+                         ${pair.member_a_role==="king" ? "bg-yellow-400/15" : "bg-rose-400/15"}`}>
+          {pair.member_a_role==="king" ? "⚔️" : "👑"}
+        </div>
+        <div className="min-w-0">
+          <p className={`font-bold text-sm truncate ${pair.member_a_role==="king" ? "text-yellow-300" : "text-rose-300"}`}>
+            {pair.member_a_name}
+          </p>
+          <p className="text-[9px] text-white/25 font-mono uppercase">{pair.member_a_role}</p>
+        </div>
+      </div>
+
+      {/* Connector */}
+      <motion.div animate={{ scale:[1,1.3,1] }} transition={{ duration:1.8, repeat:Infinity, delay:index*0.2 }}
+        className="text-base shrink-0">
+        {isKQ ? "❤️" : pair.pair_type==="king-king" ? "⚔️" : "👑"}
+      </motion.div>
+
+      {/* Member B */}
+      <div className="flex items-center gap-2 flex-1 min-w-0 justify-end">
+        <div className="min-w-0 text-right">
+          <p className={`font-bold text-sm truncate ${pair.member_b_role==="king" ? "text-yellow-300" : "text-rose-300"}`}>
+            {pair.member_b_name}
+          </p>
+          <p className="text-[9px] text-white/25 font-mono uppercase">{pair.member_b_role}</p>
+        </div>
+        <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-sm shrink-0
+                         ${pair.member_b_role==="king" ? "bg-yellow-400/15" : "bg-rose-400/15"}`}>
+          {pair.member_b_role==="king" ? "⚔️" : "👑"}
+        </div>
+      </div>
+
+      {/* "YOU" badge */}
+      {isMyPair && (
+        <div className="shrink-0 px-2 py-0.5 rounded-full bg-blue-500/20 border border-blue-400/40 text-[9px] text-blue-300 font-black">
+          YOU
+        </div>
+      )}
+    </motion.div>
+  );
+};
+
+// ── Agatambyi card ─────────────────────────────────────────────────────────────
+const AgatambyiCard = ({ ag, myName }: { ag: DBAgatambyi; myName: string }) => {
+  const isMe = myName && ag.name.toLowerCase() === myName.toLowerCase();
+  return (
+    <motion.div initial={{ opacity:0, scale:0.85 }} animate={{ opacity:1, scale:1 }}
+      transition={{ type:"spring", bounce:0.4 }}
+      className={`relative overflow-hidden rounded-3xl border-2 p-6 text-center
+                  ${isMe ? "border-yellow-300/60 shadow-xl shadow-yellow-400/20" : "border-yellow-400/40"}
+                  bg-gradient-to-br from-yellow-900/30 via-[#1a1208] to-amber-900/20`}
+      style={{ boxShadow: isMe ? "0 0 60px rgba(250,204,21,0.2)" : "0 0 30px rgba(250,204,21,0.1)" }}>
+      {["top-3 left-3","top-3 right-3","bottom-3 left-3","bottom-3 right-3"].map((pos,i) => (
+        <motion.div key={i} animate={{ opacity:[0.4,1,0.4], scale:[1,1.2,1] }}
+          transition={{ duration:2, repeat:Infinity, delay:i*0.4 }}
+          className={`absolute text-yellow-400 text-xs ${pos}`}>⭐</motion.div>
+      ))}
+      <motion.div animate={{ rotate:[0,10,-10,0] }} transition={{ duration:3, repeat:Infinity }} className="text-4xl mb-3">⭐</motion.div>
+      <p className="text-[10px] font-mono text-yellow-400/60 tracking-[0.3em] uppercase mb-1">✦ Agatambyi ✦</p>
+      <p className="text-yellow-300 font-black text-2xl tracking-tight mb-1">{ag.name}</p>
+      <p className="text-white/30 text-xs font-mono">{ag.role==="king" ? "⚔️ King" : "👑 Queen"} · The Royal Standalone</p>
+      {isMe && (
+        <motion.div initial={{ scale:0 }} animate={{ scale:1 }} transition={{ delay:0.3, type:"spring" }}
+          className="mt-3 py-2 px-4 rounded-xl bg-yellow-400/15 border border-yellow-400/30 inline-block">
+          <p className="text-[11px] text-yellow-400 font-black">That's you! ⭐ You stand alone royally</p>
+        </motion.div>
+      )}
+    </motion.div>
+  );
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MAIN PAGE
+// ─────────────────────────────────────────────────────────────────────────────
+
+type Screen = "mode-select" | "join" | "lobby-guest" | "lobby-admin" | "revealing" | "results";
+
+export default function LivePage() {
+  // ── Core state ──────────────────────────────────────────────────────────────
+  const [screen,       setScreen      ] = useState<Screen>("mode-select");
+  const [session,      setSession     ] = useState<DBSession | null>(null);
+  const [participants, setParticipants] = useState<DBParticipant[]>([]);
+  const [pairs,        setPairs       ] = useState<DBPair[]>([]);
+  const [agatambyi,    setAgatambyi   ] = useState<DBAgatambyi | null>(null);
+  const [myName,       setMyName      ] = useState("");
+  const [myRole,       setMyRole      ] = useState<Role>("king");
+  const [nameInput,    setNameInput   ] = useState("");
+  const [sessionCode,  setSessionCode ] = useState("");
+  const [isAdmin,      setIsAdmin     ] = useState(false);
+  const [generating,   setGenerating  ] = useState(false);
+  const [copied,       setCopied      ] = useState(false);
+  const [toast,        setToast       ] = useState<{msg:string;type:"ok"|"err"}|null>(null);
+  const [floats,       setFloats      ] = useState<{id:string;emoji:string}[]>([]);
+  const [revealStep,   setRevealStep  ] = useState(0); // 0-3 countdown steps
+  const subsRef = useRef<(() => void)[]>([]);
+
+  const notify = (msg: string, type: "ok"|"err" = "ok") => setToast({ msg, type });
+
+  // ── Cleanup subscriptions on unmount ────────────────────────────────────────
+  useEffect(() => {
+    return () => { subsRef.current.forEach((unsub) => unsub()); };
+  }, []);
+
+  // ── Subscribe to session status changes ─────────────────────────────────────
+  const subscribeToSession = useCallback((sessionId: string) => {
+    const channel = supabase
+      .channel(`session:${sessionId}`)
+      .on("postgres_changes", {
+        event: "UPDATE", schema: "public", table: "sessions",
+        filter: `id=eq.${sessionId}`,
+      }, async (payload) => {
+        const updated = payload.new as DBSession;
+        setSession(updated);
+        if (updated.status === "revealing") {
+          setScreen("revealing");
+          // Countdown 3-2-1 then show results
+          let step = 3;
+          setRevealStep(step);
+          const countdown = setInterval(() => {
+            step--;
+            setRevealStep(step);
+            if (step <= 0) {
+              clearInterval(countdown);
+              setScreen("results");
+            }
+          }, 1000);
+        }
+        if (updated.status === "revealed") {
+          // Load pairs & agatambyi
+          const [p, ag] = await Promise.all([
+            getPairs(sessionId),
+            getAgatambyi(sessionId),
+          ]);
+          setPairs(p);
+          setAgatambyi(ag);
+          setScreen("results");
+        }
+      })
+      .subscribe();
+
+    subsRef.current.push(() => supabase.removeChannel(channel));
+  }, []);
+
+  // ── Subscribe to participant changes (lobby live updates) ───────────────────
+  const subscribeToParticipants = useCallback((sessionId: string) => {
+    const channel = supabase
+      .channel(`participants:${sessionId}`)
+      .on("postgres_changes", {
+        event: "*", schema: "public", table: "participants",
+        filter: `session_id=eq.${sessionId}`,
+      }, async () => {
+        const updated = await getParticipants(sessionId);
+        setParticipants(updated);
+      })
+      .subscribe();
+
+    subsRef.current.push(() => supabase.removeChannel(channel));
+  }, []);
+
+  // ── Subscribe to reactions ──────────────────────────────────────────────────
+  const subscribeToReactions = useCallback((sessionId: string) => {
+    const channel = supabase
+      .channel(`reactions:${sessionId}`)
+      .on("postgres_changes", {
+        event: "INSERT", schema: "public", table: "reactions",
+        filter: `session_id=eq.${sessionId}`,
+      }, (payload) => {
+        const emoji = (payload.new as {emoji:string}).emoji;
+        setFloats((prev) => [...prev, { id: genId(), emoji }]);
+      })
+      .subscribe();
+
+    subsRef.current.push(() => supabase.removeChannel(channel));
+  }, []);
+
+  // ── ADMIN: Create session ───────────────────────────────────────────────────
+  const handleCreateSession = async () => {
+    try {
+      const sess = await createSession();
+      setSession(sess);
+      setIsAdmin(true);
+      setScreen("lobby-admin");
+      subscribeToSession(sess.id);
+      subscribeToParticipants(sess.id);
+      subscribeToReactions(sess.id);
+      notify(`Week ${sess.week_number} session created! 👑`);
+    } catch (e: any) {
+      notify(e.message, "err");
+    }
+  };
+
+  // ── GUEST: Join a session ───────────────────────────────────────────────────
+  const handleJoinSession = async () => {
+    if (!nameInput.trim()) { notify("Enter your name first", "err"); return; }
+
+    // Find session — use code if provided, else latest
+    let sess: DBSession | null = null;
+    if (sessionCode.trim()) {
+      sess = await getSession(sessionCode.trim());
+      if (!sess) { notify("Session not found. Check the code.", "err"); return; }
+    } else {
+      const { data } = await supabase
+        .from("sessions")
+        .select("*")
+        .eq("status", "lobby")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .single();
+      sess = data;
+      if (!sess) { notify("No active session found.", "err"); return; }
+    }
+
+    // Add participant
+    const { participant, error } = await addParticipant(sess.id, nameInput.trim(), myRole);
+    if (error) { notify(error, "err"); return; }
+
+    setSession(sess);
+    setMyName(nameInput.trim());
+    setScreen("lobby-guest");
+    subscribeToSession(sess.id);
+    subscribeToParticipants(sess.id);
+    subscribeToReactions(sess.id);
+
+    // Load current participants
+    const current = await getParticipants(sess.id);
+    setParticipants(current);
+    notify(`Welcome to the realm, ${nameInput.trim()}! 👑`);
+  };
+
+  // ── ADMIN: Generate pairs ───────────────────────────────────────────────────
+  const handleGenerate = async () => {
+    if (!session) return;
+    if (participants.length < 2) { notify("Need at least 2 heroes!", "err"); return; }
+    setGenerating(true);
+    try {
+      // Flip to revealing — triggers countdown on ALL connected devices
+      await updateSessionStatus(session.id, "revealing");
+
+      // Generate pairs server-side while countdown runs
+      const { pairs: newPairs, agatambyi: ag, error } = await generateAndSavePairs(session.id);
+      if (error) { notify(error, "err"); setGenerating(false); return; }
+
+      // Small buffer to let countdown finish, then flip to revealed
+      await new Promise((r) => setTimeout(r, 3200));
+      await updateSessionStatus(session.id, "revealed");
+
+      setPairs(newPairs);
+      setAgatambyi(ag);
+    } catch (e: any) {
+      notify(e.message, "err");
+    }
+    setGenerating(false);
+  };
+
+  // ── Copy session link ───────────────────────────────────────────────────────
+  const handleCopyLink = () => {
+    if (!session) return;
+    const url = `${window.location.origin}/live?session=${session.id}`;
+    navigator.clipboard.writeText(url).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  // ── React (emoji reaction) ──────────────────────────────────────────────────
+  const handleReact = (emoji: string) => {
+    if (!session) return;
+    addReaction(session.id, emoji);
+    // Instant local float too
+    setFloats((prev) => [...prev, { id: genId(), emoji }]);
+  };
+
+  // ── Read session from URL on mount (for QR join) ────────────────────────────
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const sid = params.get("session");
+    if (sid) setSessionCode(sid);
+  }, []);
+
+  // ─── SCREENS ────────────────────────────────────────────────────────────────
+
+  // ── 0. Mode select ──────────────────────────────────────────────────────────
+  if (screen === "mode-select") return (
+    <PageShell>
+      <motion.div initial={{ opacity:0, y:20 }} animate={{ opacity:1, y:0 }}
+        className="flex flex-col items-center gap-6 pt-16">
+        <motion.div animate={{ rotate:[0,10,-10,0] }} transition={{ duration:3, repeat:Infinity }}
+          className="text-5xl">👑</motion.div>
+        <div className="text-center">
+          <h1 className="text-3xl font-black tracking-tight mb-2">
+            <span className="text-white">Live </span>
+            <span className="bg-gradient-to-r from-red-400 to-rose-500 bg-clip-text text-transparent">Pairing</span>
+          </h1>
+          <p className="text-white/30 text-sm">Are you hosting or joining?</p>
+        </div>
+
+        <div className="w-full max-w-xs flex flex-col gap-3">
+          <motion.button whileHover={{ scale:1.02 }} whileTap={{ scale:0.97 }}
+            onClick={handleCreateSession}
+            className="w-full py-4 bg-gradient-to-r from-red-600 to-rose-500 rounded-2xl font-black text-base
+                       shadow-xl shadow-red-500/25 flex items-center justify-center gap-2">
+            <Crown className="w-5 h-5" />
+            I'm the Host
+          </motion.button>
+
+          <motion.button whileHover={{ scale:1.02 }} whileTap={{ scale:0.97 }}
+            onClick={() => setScreen("join")}
+            className="w-full py-4 bg-white/8 border border-white/15 rounded-2xl font-black text-base
+                       text-white hover:bg-white/12 transition-all flex items-center justify-center gap-2">
+            <Users className="w-5 h-5" />
+            I'm Joining
+          </motion.button>
+        </div>
+      </motion.div>
+      <ToastLayer toast={toast} onDone={() => setToast(null)} />
+    </PageShell>
+  );
+
+  // ── 1. Join screen (guest) ──────────────────────────────────────────────────
+  if (screen === "join") return (
+    <PageShell>
+      <motion.div initial={{ opacity:0, y:20 }} animate={{ opacity:1, y:0 }} className="flex flex-col gap-5 pt-8">
+        <div className="text-center mb-2">
+          <h2 className="text-2xl font-black">Join the Realm</h2>
+          <p className="text-white/30 text-sm mt-1">Enter your name and choose your role</p>
+        </div>
+
+        <input type="text" value={nameInput} onChange={(e) => setNameInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && handleJoinSession()}
+          placeholder="Your name..."
+          className="w-full bg-white/8 border border-white/15 rounded-xl px-4 py-3.5 text-white
+                     placeholder-white/20 text-base font-medium focus:outline-none focus:border-red-500/50 transition-all" />
+
+        {/* Role picker */}
+        <div className="flex gap-3">
+          {(["king","queen"] as Role[]).map((r) => (
+            <motion.button key={r} whileTap={{ scale:0.97 }} onClick={() => setMyRole(r)}
+              className={`flex-1 flex items-center justify-center gap-2 py-3.5 rounded-2xl border-2 transition-all
+                          ${myRole===r
+                            ? r==="king"
+                              ? "border-yellow-400 bg-yellow-400/12 text-yellow-300 shadow-lg shadow-yellow-400/15"
+                              : "border-rose-400 bg-rose-400/12 text-rose-300 shadow-lg shadow-rose-400/15"
+                            : "border-white/10 bg-white/5 text-white/40"}`}>
+              <span className="text-xl">{r==="king" ? "⚔️" : "👑"}</span>
+              <span className="font-black text-sm capitalize">{r}</span>
+            </motion.button>
+          ))}
+        </div>
+
+        {/* Optional session code */}
+        <div className="flex flex-col gap-1.5">
+          <p className="text-[11px] text-white/25 font-mono uppercase tracking-widest">Session code (optional)</p>
+          <input type="text" value={sessionCode} onChange={(e) => setSessionCode(e.target.value)}
+            placeholder="Leave empty to join latest session"
+            className="w-full bg-white/5 border border-white/10 rounded-xl px-4 py-3 text-white
+                       placeholder-white/15 text-sm font-mono focus:outline-none focus:border-white/30 transition-all" />
+        </div>
+
+        <motion.button whileHover={{ scale:1.02 }} whileTap={{ scale:0.97 }}
+          onClick={handleJoinSession}
+          className="w-full py-4 bg-gradient-to-r from-yellow-400 to-amber-400 text-gray-900
+                     rounded-2xl font-black text-base shadow-lg shadow-yellow-500/20
+                     flex items-center justify-center gap-2">
+          <Crown className="w-5 h-5" />
+          Enter the Realm
+        </motion.button>
+
+        <button onClick={() => setScreen("mode-select")}
+          className="text-white/25 text-sm text-center hover:text-white/50 transition-colors mt-2">
+          ← Back
+        </button>
+      </motion.div>
+      <ToastLayer toast={toast} onDone={() => setToast(null)} />
+    </PageShell>
+  );
+
+  // ── 2. Admin lobby ──────────────────────────────────────────────────────────
+  if (screen === "lobby-admin" && session) return (
+    <PageShell>
+      <div className="flex flex-col gap-5 pt-6">
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <div className="flex items-center gap-2 mb-0.5">
+              <Crown className="w-4 h-4 text-red-400" />
+              <span className="text-[10px] font-mono text-white/30 tracking-widest uppercase">Host · Week {session.week_number}</span>
+            </div>
+            <h2 className="text-2xl font-black">Waiting Lobby</h2>
+          </div>
+          <motion.div animate={{ scale:[1,1.08,1] }} transition={{ duration:2, repeat:Infinity }}
+            className="px-3 py-1.5 rounded-full bg-green-500/15 border border-green-500/25 flex items-center gap-1.5">
+            <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+            <span className="text-[11px] text-green-400 font-mono">LIVE</span>
+          </motion.div>
+        </div>
+
+        {/* Session ID + QR */}
+        <div className="bg-white/5 border border-white/10 rounded-3xl p-5 flex flex-col items-center gap-4">
+          <p className="text-[10px] text-white/25 font-mono tracking-widest uppercase">Share to invite players</p>
+          <QRCode value={`${typeof window !== "undefined" ? window.location.origin : ""}/live?session=${session.id}`} size={160} />
+          <div className="flex items-center gap-2 w-full">
+            <div className="flex-1 bg-white/8 rounded-xl px-3 py-2 font-mono text-xs text-white/50 truncate">
+              /live?session={session.id}
+            </div>
+            <motion.button whileTap={{ scale:0.9 }} onClick={handleCopyLink}
+              className={`w-9 h-9 rounded-xl flex items-center justify-center border transition-all
+                          ${copied ? "bg-green-500/20 border-green-500/40" : "bg-white/10 border-white/15 hover:bg-white/15"}`}>
+              {copied ? <Check className="w-4 h-4 text-green-400" /> : <Copy className="w-4 h-4 text-white/50" />}
+            </motion.button>
+          </div>
+        </div>
+
+        {/* Stats */}
+        <div className="grid grid-cols-3 gap-3">
+          {[
+            { label:"Total",  value:participants.length,                               icon:"🧙", color:"text-white"      },
+            { label:"Kings",  value:participants.filter(p=>p.role==="king").length,   icon:"⚔️", color:"text-yellow-300" },
+            { label:"Queens", value:participants.filter(p=>p.role==="queen").length,  icon:"👑", color:"text-rose-300"   },
+          ].map((s) => (
+            <div key={s.label} className="flex flex-col items-center gap-1 p-3 rounded-2xl bg-white/5 border border-white/8">
+              <span className="text-lg">{s.icon}</span>
+              <motion.span key={s.value} initial={{ scale:1.4 }} animate={{ scale:1 }}
+                className={`text-2xl font-black ${s.color}`}>{s.value}</motion.span>
+              <span className="text-[9px] text-white/25 uppercase font-mono">{s.label}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Participant chips */}
+        {participants.length > 0 && (
+          <div className="bg-white/5 border border-white/10 rounded-2xl p-4">
+            <p className="text-[10px] text-white/25 font-mono uppercase tracking-widest mb-3">Heroes in lobby</p>
+            <div className="flex flex-wrap gap-2">
+              <AnimatePresence>
+                {participants.map((p) => (
+                  <motion.div key={p.id} initial={{ opacity:0, scale:0.7 }} animate={{ opacity:1, scale:1 }} exit={{ opacity:0, scale:0.7 }}
+                    className={`flex items-center gap-1.5 pl-2 pr-2.5 py-1.5 rounded-full border text-xs font-semibold
+                                ${p.role==="king" ? "bg-yellow-400/10 border-yellow-400/25 text-yellow-300" : "bg-rose-400/10 border-rose-400/25 text-rose-300"}`}>
+                    <span>{p.role==="king" ? "⚔️" : "👑"}</span>
+                    <span>{p.name}</span>
+                    <motion.button whileTap={{ scale:0.85 }} onClick={() => removeParticipant(p.id)}
+                      className="w-4 h-4 rounded-full bg-white/10 hover:bg-red-500/30 flex items-center justify-center text-[9px] ml-0.5">
+                      ×
+                    </motion.button>
+                  </motion.div>
+                ))}
+              </AnimatePresence>
+            </div>
+          </div>
+        )}
+
+        {/* Generate button */}
+        <motion.button
+          whileHover={{ scale: participants.length >= 2 ? 1.02 : 1 }}
+          whileTap={{ scale: participants.length >= 2 ? 0.97 : 1 }}
+          onClick={handleGenerate}
+          disabled={participants.length < 2 || generating}
+          className={`w-full py-4 rounded-2xl font-black text-base relative overflow-hidden
+                       flex items-center justify-center gap-2 transition-all
+                       ${participants.length >= 2 && !generating
+                         ? "bg-gradient-to-r from-yellow-400 via-amber-400 to-yellow-300 text-gray-900 shadow-xl shadow-yellow-500/30"
+                         : "bg-white/8 text-white/25 cursor-not-allowed"}`}>
+          {generating ? (
+            <><RefreshCw className="w-5 h-5 animate-spin" />Generating...</>
+          ) : (
+            <>
+              <motion.div animate={{ x:["-100%","200%"] }} transition={{ duration:2, repeat:Infinity }}
+                className="absolute inset-y-0 w-16 bg-gradient-to-r from-transparent via-white/30 to-transparent skew-x-12 pointer-events-none" />
+              <Crown className="w-5 h-5 relative z-10" />
+              <span className="relative z-10">Generate Royal Pairs</span>
+              <Sword className="w-5 h-5 relative z-10" />
+            </>
+          )}
+        </motion.button>
+
+        {participants.length < 2 && (
+          <p className="text-center text-white/20 text-xs font-mono -mt-2">
+            {participants.length === 0 ? "Waiting for heroes to join..." : "Need at least 2 heroes to pair"}
+          </p>
+        )}
+      </div>
+      <ToastLayer toast={toast} onDone={() => setToast(null)} />
+    </PageShell>
+  );
+
+  // ── 3. Guest lobby ──────────────────────────────────────────────────────────
+  if (screen === "lobby-guest" && session) return (
+    <PageShell>
+      <div className="flex flex-col items-center gap-6 pt-10">
+        {/* Breathing logo */}
+        <motion.div animate={{ scale:[1,1.08,1], opacity:[0.8,1,0.8] }} transition={{ duration:2.5, repeat:Infinity }}
+          className="text-6xl">👑</motion.div>
+
+        <div className="text-center">
+          <p className="text-[10px] text-white/30 font-mono tracking-widest uppercase mb-1">You're in the realm</p>
+          <h2 className="text-2xl font-black text-white">
+            Welcome, <span className={myRole==="king" ? "text-yellow-300" : "text-rose-300"}>{myName}</span>!
+          </h2>
+          <div className={`inline-flex items-center gap-1.5 mt-2 px-3 py-1 rounded-full border text-xs font-bold
+                           ${myRole==="king" ? "bg-yellow-400/10 border-yellow-400/30 text-yellow-300" : "bg-rose-400/10 border-rose-400/30 text-rose-300"}`}>
+            <span>{myRole==="king" ? "⚔️" : "👑"}</span>
+            <span>{myRole==="king" ? "King" : "Queen"}</span>
+          </div>
+        </div>
+
+        {/* Live participant counter */}
+        <div className="w-full bg-white/5 border border-white/10 rounded-2xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-[10px] text-white/25 font-mono uppercase tracking-widest">Heroes in lobby</p>
+            <motion.div animate={{ scale:[1,1.08,1] }} transition={{ duration:2, repeat:Infinity }}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-green-500/10 border border-green-500/20">
+              <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+              <span className="text-[10px] text-green-400 font-mono">{participants.length} joined</span>
+            </motion.div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <AnimatePresence>
+              {participants.map((p) => (
+                <motion.div key={p.id} initial={{ opacity:0, scale:0.7 }} animate={{ opacity:1, scale:1 }} exit={{ opacity:0 }}
+                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full border text-xs font-semibold
+                              ${p.name.toLowerCase()===myName.toLowerCase()
+                                ? "bg-blue-400/15 border-blue-400/40 text-blue-300"
+                                : p.role==="king" ? "bg-yellow-400/10 border-yellow-400/25 text-yellow-300" : "bg-rose-400/10 border-rose-400/25 text-rose-300"}`}>
+                  <span>{p.role==="king" ? "⚔️" : "👑"}</span>
+                  <span>{p.name}{p.name.toLowerCase()===myName.toLowerCase() ? " (you)" : ""}</span>
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          </div>
+        </div>
+
+        {/* Waiting pulse */}
+        <div className="flex flex-col items-center gap-2">
+          <div className="flex gap-1.5">
+            {[0,1,2].map((i) => (
+              <motion.div key={i} animate={{ opacity:[0.3,1,0.3], scale:[0.8,1.1,0.8] }}
+                transition={{ duration:1.2, repeat:Infinity, delay:i*0.2 }}
+                className="w-2 h-2 rounded-full bg-red-400" />
+            ))}
+          </div>
+          <p className="text-white/25 text-xs font-mono">Waiting for host to generate pairs...</p>
+        </div>
+      </div>
+      <ToastLayer toast={toast} onDone={() => setToast(null)} />
+    </PageShell>
+  );
+
+  // ── 4. Revealing (countdown) ─────────────────────────────────────────────────
+  if (screen === "revealing") return (
+    <PageShell>
+      <div className="flex flex-col items-center justify-center min-h-[70vh] gap-8">
+        <motion.p initial={{ opacity:0, y:-10 }} animate={{ opacity:1, y:0 }}
+          className="text-white/50 font-mono text-sm tracking-widest uppercase">
+          The spirits are choosing...
+        </motion.p>
+
+        <AnimatePresence mode="wait">
+          <motion.div key={revealStep}
+            initial={{ scale:0.3, opacity:0 }} animate={{ scale:1, opacity:1 }} exit={{ scale:2, opacity:0 }}
+            transition={{ type:"spring", bounce:0.4, duration:0.5 }}
+            className="text-[120px] font-black text-white leading-none text-center"
+            style={{ textShadow:"0 0 80px rgba(239,68,68,0.6)" }}>
+            {revealStep > 0 ? revealStep : "✨"}
+          </motion.div>
+        </AnimatePresence>
+
+        <motion.div animate={{ opacity:[0.5,1,0.5] }} transition={{ duration:1, repeat:Infinity }}
+          className="text-white/30 text-sm font-mono">
+          {revealStep > 0 ? `Revealing in ${revealStep}...` : "Forging royal bonds..."}
+        </motion.div>
+
+        {/* Particle ring */}
+        <div className="relative w-32 h-32">
+          {[...Array(8)].map((_,i) => (
+            <motion.div key={i}
+              animate={{ rotate: 360 }} transition={{ duration: 3+i*0.3, repeat:Infinity, ease:"linear" }}
+              className="absolute inset-0 flex items-start justify-center"
+              style={{ transform:`rotate(${i*45}deg)` }}>
+              <motion.div animate={{ opacity:[0.3,1,0.3], scale:[0.8,1.2,0.8] }}
+                transition={{ duration:1.5, repeat:Infinity, delay:i*0.2 }}
+                className="w-2 h-2 rounded-full bg-yellow-400 mt-1" />
+            </motion.div>
+          ))}
+        </div>
+      </div>
+    </PageShell>
+  );
+
+  // ── 5. Results ───────────────────────────────────────────────────────────────
+  if (screen === "results" && session) return (
+    <PageShell>
+      {/* Emoji floats */}
       <AnimatePresence>
-        {confetti && Array.from({ length:22 }).map((_,i) => (
-          <motion.div key={i}
-            initial={{ opacity:1, y:-20, x:`${Math.random()*100}vw`, rotate:0 }}
-            animate={{ opacity:0, y:"100vh", rotate:Math.random()*720-360 }}
-            transition={{ duration:3+Math.random()*2, delay:Math.random()*0.5 }}
-            className="fixed top-0 w-2 h-3 rounded-sm pointer-events-none z-50"
-            style={{ background:["#ef4444","#facc15","#f472b6","#60a5fa","#34d399"][i%5] }}/>
+        {floats.map((f) => (
+          <EmojiFloat key={f.id} emoji={f.emoji} id={f.id}
+            onDone={() => setFloats((prev) => prev.filter((x) => x.id !== f.id))} />
         ))}
       </AnimatePresence>
 
-      <div className="relative z-10 container mx-auto px-4 pt-8 pb-16 max-w-lg">
+      <div className="flex flex-col gap-5 pt-6 pb-24">
+        {/* Header */}
+        <motion.div initial={{ opacity:0, y:-20 }} animate={{ opacity:1, y:0 }} className="text-center">
+          <motion.div animate={{ rotate:[0,10,-10,0] }} transition={{ duration:3, repeat:Infinity }}
+            className="text-4xl mb-2">👑</motion.div>
+          <h2 className="text-3xl font-black tracking-tight">
+            <span className="text-white">Week </span>
+            <span className="bg-gradient-to-r from-yellow-300 to-amber-400 bg-clip-text text-transparent">
+              {session.week_number}
+            </span>
+            <span className="text-white"> Pairs</span>
+          </h2>
+          <p className="text-white/30 text-sm mt-1">
+            {pairs.length} pair{pairs.length!==1?"s":""} · {session.date}
+            {myName && <span className="text-blue-300"> · your pair is highlighted</span>}
+          </p>
+        </motion.div>
 
-        {/* ══ HOME ══════════════════════════════════════════════════════════ */}
-        {view === "home" && (
-          <motion.div initial={{ opacity:0, y:20 }} animate={{ opacity:1, y:0 }} className="flex flex-col gap-5">
-            <div className="text-center mb-4">
-              <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-red-500/10 border border-red-500/20 mb-4">
-                <motion.div animate={{ opacity:[1,0.3,1] }} transition={{ duration:1.2, repeat:Infinity }}
-                  className="w-1.5 h-1.5 rounded-full bg-red-500"/>
-                <span className="text-xs font-mono tracking-widest text-red-400 uppercase">Live Pairing</span>
-              </div>
-              <h1 className="text-4xl sm:text-5xl font-black tracking-tight leading-none mb-2">
-                <span className="text-white">Royal </span>
-                <span className="bg-gradient-to-r from-red-400 to-rose-500 bg-clip-text text-transparent">Session</span>
-              </h1>
-              <p className="text-white/30 text-sm">Host a pairing or join one with a code</p>
-            </div>
-
-            {/* Host */}
-            <motion.button whileHover={{ scale:1.02 }} whileTap={{ scale:0.98 }} onClick={handleHostSession}
-              className="w-full p-6 rounded-3xl bg-gradient-to-br from-red-600/20 to-rose-900/20
-                         border border-red-500/30 text-left group hover:border-red-500/50 transition-all">
-              <div className="flex items-start gap-4">
-                <div className="w-12 h-12 rounded-2xl bg-red-500/20 flex items-center justify-center shrink-0 group-hover:bg-red-500/30 transition-colors">
-                  <Crown className="w-6 h-6 text-red-400"/>
-                </div>
-                <div className="flex-1">
-                  <p className="text-white font-black text-lg leading-tight">Host a Session</p>
-                  <p className="text-white/40 text-sm mt-1 leading-relaxed">Create a live pairing. Get a QR code & session code to share.</p>
-                </div>
-                <ArrowRight className="w-5 h-5 text-red-400/60 group-hover:text-red-400 mt-1 transition-colors"/>
-              </div>
-            </motion.button>
-
-            {/* Join */}
-            <div className="w-full p-6 rounded-3xl bg-white/5 border border-white/10">
-              <div className="flex items-start gap-4 mb-4">
-                <div className="w-12 h-12 rounded-2xl bg-yellow-500/15 flex items-center justify-center shrink-0">
-                  <LogIn className="w-6 h-6 text-yellow-400"/>
-                </div>
-                <div>
-                  <p className="text-white font-black text-lg leading-tight">Join a Session</p>
-                  <p className="text-white/40 text-sm mt-1">Enter the code shared by the host</p>
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <input type="text" value={joinCode}
-                  onChange={(e) => { setJoinCode(e.target.value.toUpperCase()); setFormError(""); }}
-                  onKeyDown={(e) => e.key==="Enter" && handleGuestCodeSubmit()}
-                  placeholder="e.g. WK12" maxLength={6}
-                  className="flex-1 bg-white/8 border border-white/15 rounded-xl px-4 py-3
-                             text-white placeholder-white/20 text-sm font-mono font-bold tracking-widest uppercase
-                             focus:outline-none focus:border-yellow-500/50 focus:bg-white/10 transition-all"/>
-                <motion.button whileTap={{ scale:0.97 }} onClick={handleGuestCodeSubmit}
-                  className="px-5 py-3 bg-gradient-to-r from-yellow-400 to-amber-400 text-gray-900
-                             rounded-xl font-black text-sm shadow-lg shadow-yellow-500/20 shrink-0">Join</motion.button>
-              </div>
-              <AnimatePresence>
-                {formError && view==="home" && (
-                  <motion.p initial={{ opacity:0,y:-4 }} animate={{ opacity:1,y:0 }} exit={{ opacity:0 }}
-                    className="text-red-400 text-xs mt-2 flex items-center gap-1"><span>⚠</span>{formError}</motion.p>
-                )}
-              </AnimatePresence>
-              <p className="text-white/20 text-[11px] font-mono mt-3 text-center">or scan the QR code shared by the host</p>
-            </div>
-          </motion.div>
-        )}
-
-        {/* ══ GUEST JOIN FORM ═══════════════════════════════════════════════ */}
-        {view === "guest-join" && (
-          <motion.div initial={{ opacity:0, y:20 }} animate={{ opacity:1, y:0 }} className="flex flex-col gap-5">
-            <div className="text-center mb-2">
-              <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-green-500/10 border border-green-500/20 mb-4">
-                <div className="w-1.5 h-1.5 rounded-full bg-green-400"/>
-                <span className="text-xs font-mono tracking-widest text-green-400 uppercase">Code Verified ✓</span>
-              </div>
-              <h1 className="text-3xl font-black mb-1">Choose Your Class</h1>
-              <p className="text-white/30 text-sm">Enter your name and pick King or Queen</p>
-            </div>
-            <div className="bg-white/5 border border-white/10 rounded-3xl p-6 flex flex-col gap-5">
-              <div>
-                <label className="block text-[11px] text-white/40 tracking-widest uppercase mb-2 font-mono">Hero Name</label>
-                <input type="text" value={guestName}
-                  onChange={(e) => { setGuestName(e.target.value); setFormError(""); }}
-                  onKeyDown={(e) => e.key==="Enter" && handleGuestEnterLobby()}
-                  placeholder="Enter your name..."
-                  className="w-full bg-white/8 border border-white/15 rounded-xl px-4 py-3.5
-                             text-white placeholder-white/20 text-sm font-medium
-                             focus:outline-none focus:border-red-500/50 focus:bg-white/10 transition-all"/>
-              </div>
-              <div>
-                <label className="block text-[11px] text-white/40 tracking-widest uppercase mb-2 font-mono">Choose Class</label>
-                <div className="flex gap-3">
-                  {(["king","queen"] as HeroRole[]).map((r) => (
-                    <motion.button key={r} whileHover={{ scale:1.03 }} whileTap={{ scale:0.97 }}
-                      onClick={() => { setGuestRole(r); setFormError(""); }}
-                      className={`flex-1 flex flex-col items-center gap-2 py-5 rounded-2xl border-2 transition-all relative overflow-hidden
-                                  ${guestRole===r
-                                    ? r==="king"?"border-yellow-400 bg-yellow-400/10 shadow-lg shadow-yellow-400/20"
-                                               :"border-rose-400 bg-rose-400/10 shadow-lg shadow-rose-400/20"
-                                    :"border-white/10 bg-white/5 hover:border-white/20"}`}>
-                      {guestRole===r && (
-                        <motion.div initial={{ scale:0 }} animate={{ scale:1 }}
-                          className={`absolute top-2 right-2 w-4 h-4 rounded-full flex items-center justify-center text-[8px] font-bold
-                                      ${r==="king"?"bg-yellow-400 text-yellow-900":"bg-rose-400 text-rose-900"}`}>✓</motion.div>
-                      )}
-                      <span className="text-3xl">{r==="king"?"⚔️":"👑"}</span>
-                      <p className={`text-xs font-bold tracking-widest uppercase ${guestRole===r?r==="king"?"text-yellow-300":"text-rose-300":"text-white/40"}`}>
-                        {r==="king"?"King":"Queen"}
-                      </p>
-                    </motion.button>
-                  ))}
-                </div>
-              </div>
-              <AnimatePresence>
-                {formError && (
-                  <motion.p initial={{ opacity:0,y:-4 }} animate={{ opacity:1,y:0 }} exit={{ opacity:0 }}
-                    className="text-red-400 text-xs flex items-center gap-1"><span>⚠</span>{formError}</motion.p>
-                )}
-              </AnimatePresence>
-              <motion.button whileHover={{ scale:1.02 }} whileTap={{ scale:0.97 }} onClick={handleGuestEnterLobby}
-                className="w-full py-4 bg-gradient-to-r from-red-600 to-rose-500 rounded-xl
-                           font-black text-sm tracking-wide shadow-lg shadow-red-500/25 flex items-center justify-center gap-2">
-                <Sword className="w-4 h-4"/>Join the Live Pairing
-              </motion.button>
-            </div>
-          </motion.div>
-        )}
-
-        {/* ══ HOST LOBBY ════════════════════════════════════════════════════ */}
-        {view === "host-lobby" && (
-          <motion.div initial={{ opacity:0, y:20 }} animate={{ opacity:1, y:0 }} className="flex flex-col gap-5">
-            <div className="text-center mb-2">
-              <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-red-500/10 border border-red-500/20 mb-4">
-                <motion.div animate={{ opacity:[1,0.3,1] }} transition={{ duration:1, repeat:Infinity }}
-                  className="w-1.5 h-1.5 rounded-full bg-red-500"/>
-                <span className="text-xs font-mono tracking-widest text-red-400 uppercase">You're the Host · Session Open</span>
-              </div>
-              <h1 className="text-3xl font-black mb-1">Share & Wait</h1>
-              <p className="text-white/30 text-sm">Heroes are joining your session</p>
-            </div>
-            <div className="bg-white/5 border border-white/10 rounded-3xl p-6 flex flex-col items-center gap-6">
-              <QRVisual code={SESSION_CODE}/>
-              <div className="w-full mt-4">
-                <p className="text-[10px] text-white/30 font-mono tracking-widest uppercase text-center mb-2">Or share this code</p>
-                <div className="flex items-center gap-2 bg-white/8 border border-white/12 rounded-xl px-4 py-3">
-                  <span className="flex-1 text-center font-black font-mono text-2xl tracking-[0.3em] text-white">{SESSION_CODE}</span>
-                  <motion.button whileTap={{ scale:0.9 }} onClick={() => handleCopy(SESSION_CODE)}
-                    className="w-8 h-8 rounded-lg bg-white/10 flex items-center justify-center hover:bg-white/20 transition-colors shrink-0">
-                    {copied ? <Check className="w-4 h-4 text-green-400"/> : <Copy className="w-4 h-4 text-white/50"/>}
-                  </motion.button>
-                </div>
-              </div>
-            </div>
-            <StatsRow total={safeHeroes.length} kings={kingCount} queens={queenCount}/>
-            {safeHeroes.length > 0 && <LobbyList heroes={safeHeroes}/>}
-            <AnimatePresence>
-              {canStart ? (
-                <motion.div initial={{ opacity:0,y:15 }} animate={{ opacity:1,y:0 }} exit={{ opacity:0 }}>
-                  <motion.button whileHover={{ scale:1.02 }} whileTap={{ scale:0.97 }} onClick={handleStartPairing}
-                    className="w-full py-4 rounded-2xl font-black text-base tracking-wide
-                               bg-gradient-to-r from-yellow-400 via-amber-400 to-yellow-300 text-gray-900
-                               shadow-xl shadow-yellow-500/30 hover:shadow-yellow-500/50 transition-all
-                               flex items-center justify-center gap-2">
-                    <Crown className="w-5 h-5"/>Start the Royal Pairing<Sword className="w-5 h-5"/>
-                  </motion.button>
-                  <p className="text-center text-[11px] text-white/25 mt-2 font-mono">
-                    Only you (the host) can start · {safeHeroes.length} heroes ready
-                  </p>
-                </motion.div>
-              ) : (
-                <p className="text-center text-white/20 text-xs font-mono py-2">✦ waiting for at least 1 King & 1 Queen ✦</p>
-              )}
-            </AnimatePresence>
-          </motion.div>
-        )}
-
-        {/* ══ GUEST LOBBY ═══════════════════════════════════════════════════ */}
-        {view === "guest-lobby" && (
-          <motion.div initial={{ opacity:0, y:20 }} animate={{ opacity:1, y:0 }} className="flex flex-col gap-5">
-            <div className="text-center mb-2">
-              <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-green-500/10 border border-green-500/20 mb-4">
-                <motion.div animate={{ opacity:[1,0.3,1] }} transition={{ duration:1, repeat:Infinity }}
-                  className="w-1.5 h-1.5 rounded-full bg-green-400"/>
-                <span className="text-xs font-mono tracking-widest text-green-400 uppercase">You're in the Lobby!</span>
-              </div>
-              <h1 className="text-3xl font-black mb-1">Waiting for Host</h1>
-              <p className="text-white/30 text-sm">The host will start when everyone's ready</p>
-            </div>
-            {safeHeroes.find((h) => h.id.startsWith("me-")) && (() => {
-              const me = safeHeroes.find((h) => h.id.startsWith("me-"))!;
-              return (
-                <div className="bg-white/5 border border-white/10 rounded-2xl p-4 flex items-center gap-3">
-                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center text-xl shrink-0 ${me.role==="king"?"bg-yellow-400/15":"bg-rose-400/15"}`}>
-                    {me.role==="king"?"⚔️":"👑"}
+        {/* Your pair hero card */}
+        {myName && (() => {
+          const myPair = pairs.find((p) =>
+            p.member_a_name.toLowerCase()===myName.toLowerCase() ||
+            p.member_b_name.toLowerCase()===myName.toLowerCase()
+          );
+          if (!myPair) return null;
+          const partner = myPair.member_a_name.toLowerCase()===myName.toLowerCase()
+            ? { name: myPair.member_b_name, role: myPair.member_b_role }
+            : { name: myPair.member_a_name, role: myPair.member_a_role };
+          return (
+            <motion.div initial={{ opacity:0, scale:0.9 }} animate={{ opacity:1, scale:1 }}
+              transition={{ delay:0.2, type:"spring" }}
+              className="bg-blue-500/10 border-2 border-blue-400/40 rounded-3xl p-5 text-center"
+              style={{ boxShadow:"0 0 40px rgba(59,130,246,0.15)" }}>
+              <p className="text-[10px] text-blue-400/60 font-mono tracking-widest uppercase mb-3">✦ Your Royal Pair ✦</p>
+              <div className="flex items-center justify-center gap-4">
+                <div className="flex flex-col items-center gap-1">
+                  <div className="w-14 h-14 rounded-2xl bg-yellow-400/15 border border-yellow-400/30 flex items-center justify-center text-2xl">
+                    {myRole==="king" ? "⚔️" : "👑"}
                   </div>
-                  <div>
-                    <p className="text-white font-bold text-sm">{me.name}</p>
-                    <p className={`text-[11px] font-mono ${me.role==="king"?"text-yellow-400/60":"text-rose-400/60"}`}>
-                      {me.role==="king"?"King · You":"Queen · You"}
-                    </p>
+                  <p className={`font-black text-sm ${myRole==="king" ? "text-yellow-300" : "text-rose-300"}`}>{myName}</p>
+                  <p className="text-[9px] text-blue-400/60 font-mono">You</p>
+                </div>
+                <motion.div animate={{ scale:[1,1.3,1] }} transition={{ duration:1.5, repeat:Infinity }}
+                  className="text-2xl">❤️</motion.div>
+                <div className="flex flex-col items-center gap-1">
+                  <div className={`w-14 h-14 rounded-2xl border flex items-center justify-center text-2xl
+                                   ${partner.role==="king" ? "bg-yellow-400/15 border-yellow-400/30" : "bg-rose-400/15 border-rose-400/30"}`}>
+                    {partner.role==="king" ? "⚔️" : "👑"}
                   </div>
-                  <div className="ml-auto px-2 py-1 rounded-full bg-blue-500/15 border border-blue-500/20">
-                    <span className="text-[10px] text-blue-400 font-mono font-bold">YOU</span>
-                  </div>
+                  <p className={`font-black text-sm ${partner.role==="king" ? "text-yellow-300" : "text-rose-300"}`}>{partner.name}</p>
+                  <p className="text-[9px] text-white/25 font-mono capitalize">{partner.role}</p>
                 </div>
-              );
-            })()}
-            <StatsRow total={safeHeroes.length} kings={kingCount} queens={queenCount}/>
-            {safeHeroes.length > 0 && <LobbyList heroes={safeHeroes}/>}
-            <div className="flex items-center justify-center gap-3 py-4 rounded-2xl bg-white/3 border border-white/8">
-              <div className="flex gap-1">
-                {[0,1,2].map(i => (
-                  <motion.div key={i} animate={{ scale:[1,1.5,1], opacity:[0.3,1,0.3] }}
-                    transition={{ duration:0.8, repeat:Infinity, delay:i*0.25 }}
-                    className="w-1.5 h-1.5 rounded-full bg-yellow-400"/>
-                ))}
               </div>
-              <p className="text-white/30 text-xs font-mono">Waiting for host to start...</p>
-            </div>
-          </motion.div>
-        )}
+            </motion.div>
+          );
+        })()}
 
-        {/* ══ REVEALING ═════════════════════════════════════════════════════ */}
-        {view === "revealing" && (
-          <motion.div initial={{ opacity:0 }} animate={{ opacity:1 }} className="flex flex-col items-center gap-8 py-10">
-            <div className="relative w-40 h-40 flex items-center justify-center">
-              <motion.div animate={{ rotate:360 }} transition={{ duration:3, repeat:Infinity, ease:"linear" }}
-                className="absolute inset-0 rounded-full border border-dashed border-yellow-400/20"/>
-              <motion.div animate={{ rotate:-360 }} transition={{ duration:2, repeat:Infinity, ease:"linear" }}
-                className="absolute inset-4 rounded-full border border-dashed border-red-400/30"/>
-              <motion.div animate={{ scale:[1,1.3,1], opacity:[0.3,0.7,0.3] }} transition={{ duration:1.2, repeat:Infinity }}
-                className="absolute inset-8 rounded-full bg-yellow-400/20 blur-lg"/>
-              <motion.div animate={{ scale:[1,1.1,1], rotate:[0,5,-5,0] }} transition={{ duration:0.8, repeat:Infinity }}
-                className="relative z-10 text-5xl">👑</motion.div>
-              {[0,60,120,180,240,300].map((deg,i) => (
-                <motion.div key={i} animate={{ rotate:360 }} transition={{ duration:2.5, repeat:Infinity, ease:"linear", delay:i*0.1 }} className="absolute inset-0">
-                  <div className="absolute w-2 h-2 rounded-full bg-yellow-400/60"
-                    style={{ top:"50%",left:"50%",transform:`rotate(${deg}deg) translateX(65px) translate(-50%,-50%)` }}/>
-                </motion.div>
-              ))}
-            </div>
-            <div className="text-center">
-              <motion.p animate={{ opacity:[0.5,1,0.5] }} transition={{ duration:1.5, repeat:Infinity }}
-                className="text-white/60 text-sm font-mono tracking-widest uppercase">The Royal Spirits Are Choosing...</motion.p>
-              <div className="flex justify-center gap-1 mt-3">
-                {[0,1,2].map(i => (
-                  <motion.div key={i} animate={{ scale:[1,1.5,1], opacity:[0.3,1,0.3] }}
-                    transition={{ duration:0.8, repeat:Infinity, delay:i*0.25 }}
-                    className="w-1.5 h-1.5 rounded-full bg-yellow-400"/>
-                ))}
-              </div>
-            </div>
-          </motion.div>
-        )}
+        {/* Agatambyi */}
+        {agatambyi && <AgatambyiCard ag={agatambyi} myName={myName} />}
 
-        {/* ══ REVEALED ══════════════════════════════════════════════════════ */}
-        {view === "revealed" && featuredPair && (
-          <motion.div initial={{ opacity:0 }} animate={{ opacity:1 }} className="flex flex-col items-center gap-5 w-full">
+        {/* All pairs */}
+        <div>
+          <p className="text-[10px] text-white/25 font-mono uppercase tracking-widest mb-3 flex items-center gap-2">
+            <Star className="w-3 h-3" /> All Royal Pairs
+          </p>
+          <div className="flex flex-col gap-2">
+            {pairs.map((pair, i) => (
+              <PairCard key={pair.id} pair={pair} index={i} myName={myName} />
+            ))}
+          </div>
+        </div>
+      </div>
 
-            {/* Title */}
-            <div className="text-center mb-1">
-              <motion.h1 initial={{ opacity:0, scale:0.8 }} animate={{ opacity:1, scale:1 }}
-                className="text-4xl font-black bg-gradient-to-r from-yellow-300 via-amber-400 to-rose-400 bg-clip-text text-transparent mb-1">
-                The Royal Pairs! 👑
-              </motion.h1>
-              <p className="text-white/30 text-sm">{allPairs.length} pair{allPairs.length!==1?"s":""} forged this week</p>
-            </div>
-
-            {/* ── YOUR / FEATURED big pair ── */}
-            {!isHost && (
-              <p className="text-[10px] text-blue-400 font-mono tracking-widest uppercase -mb-2">
-                ✦ your destined pair ✦
-              </p>
-            )}
-            <FeaturedPairCard pair={featuredPair} isYours={!isHost}/>
-
-            {/* ── Reactions ── */}
-            <div className="w-full bg-white/5 border border-white/10 rounded-2xl p-4 relative overflow-hidden">
-              <div className="absolute inset-0 pointer-events-none overflow-hidden">
-                <AnimatePresence>
-                  {reactions.map((r) => (
-                    <FloatingReaction key={r.id} reaction={r}
-                      onDone={() => setReactions((prev) => prev.filter((x) => x.id!==r.id))}/>
-                  ))}
-                </AnimatePresence>
-              </div>
-              <p className="text-[10px] text-white/30 font-mono tracking-widest uppercase mb-3 text-center relative z-10">React to the Pair</p>
-              <div className="flex items-center justify-center gap-2 flex-wrap relative z-10">
-                {REACTION_EMOJIS.map((emoji) => (
-                  <motion.button key={emoji} whileHover={{ scale:1.15 }} whileTap={{ scale:0.85 }} onClick={() => handleReact(emoji)}
-                    className="flex flex-col items-center gap-1 px-3 py-2 rounded-xl
-                               bg-white/5 hover:bg-white/12 border border-white/8 hover:border-white/20 transition-all">
-                    <span className="text-xl">{emoji}</span>
-                    <span className="text-[9px] text-white/30 font-mono">{reactionCounts[emoji]||0}</span>
-                  </motion.button>
-                ))}
-              </div>
-            </div>
-
-            {/* ── All pairs list ── */}
-            {allPairs.length > 0 && (
-              <motion.div initial={{ opacity:0, y:20 }} animate={{ opacity:1, y:0 }} transition={{ delay:0.4 }} className="w-full">
-                <div className="flex items-center gap-3 mb-3">
-                  <div className="flex-1 h-px bg-white/8"/>
-                  <p className="text-[10px] text-white/30 font-mono tracking-widest uppercase whitespace-nowrap">
-                    All {allPairs.length} Pairs This Week
-                  </p>
-                  <div className="flex-1 h-px bg-white/8"/>
-                </div>
-                <div className="flex flex-col gap-2">
-                  {allPairs.map((pair, i) => (
-                    <SmallPairRow
-                      key={pair.id}
-                      pair={pair}
-                      index={i}
-                      highlight={pair.id === featuredPair.id}
-                    />
-                  ))}
-                </div>
-              </motion.div>
-            )}
-
-            {/* ── Actions ── */}
-            <div className="flex gap-3 w-full pt-1">
-              <motion.button whileTap={{ scale:0.97 }} onClick={handleReset}
-                className="flex-1 py-3 rounded-xl border border-white/15 text-white/50
-                           hover:border-white/30 hover:text-white/80 text-sm font-semibold transition-all">
-                New Session
-              </motion.button>
-              <motion.button whileTap={{ scale:0.97 }}
-                className="flex-1 py-3 rounded-xl bg-gradient-to-r from-red-600 to-rose-500
-                           text-white text-sm font-bold shadow-lg shadow-red-500/20
+      {/* Sticky reaction bar */}
+      <div className="fixed bottom-0 left-0 right-0 z-40 pb-safe">
+        <div className="max-w-lg mx-auto px-4 pb-4">
+          <div className="bg-[#1a1a22]/95 backdrop-blur-xl border border-white/15 rounded-2xl p-3
                            flex items-center justify-center gap-2">
-                <Star className="w-4 h-4"/>Share Pairs
+            {REACTION_EMOJIS.map((emoji) => (
+              <motion.button key={emoji} whileHover={{ scale:1.3 }} whileTap={{ scale:0.85 }}
+                onClick={() => handleReact(emoji)}
+                className="text-2xl p-1 rounded-xl hover:bg-white/10 transition-colors">
+                {emoji}
               </motion.button>
-            </div>
+            ))}
+          </div>
+        </div>
+      </div>
 
-          </motion.div>
-        )}
+      <ToastLayer toast={toast} onDone={() => setToast(null)} />
+    </PageShell>
+  );
 
+  return null;
+}
+
+// ── Page shell (shared BG + container) ────────────────────────────────────────
+function PageShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="min-h-screen bg-[#0d0d10] text-white overflow-x-hidden">
+      <div className="fixed inset-0 pointer-events-none">
+        <div className="absolute top-0 left-1/4 w-[500px] h-[400px] bg-red-900/10 rounded-full blur-[140px]" />
+        <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-yellow-900/8 rounded-full blur-[120px]" />
+        <div className="absolute inset-0 opacity-[0.02]"
+          style={{ backgroundImage:"linear-gradient(rgba(255,255,255,0.5) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.5) 1px,transparent 1px)", backgroundSize:"40px 40px" }} />
+      </div>
+      <div className="relative z-10 container mx-auto px-4 pt-6 pb-8 max-w-lg">
+        {children}
       </div>
     </div>
+  );
+}
+
+// ── Toast layer ────────────────────────────────────────────────────────────────
+function ToastLayer({ toast, onDone }: { toast:{msg:string;type:"ok"|"err"}|null; onDone:()=>void }) {
+  return (
+    <AnimatePresence>
+      {toast && <Toast key={toast.msg} msg={toast.msg} type={toast.type} onDone={onDone} />}
+    </AnimatePresence>
   );
 }
