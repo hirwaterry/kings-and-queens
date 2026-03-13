@@ -48,7 +48,7 @@ export const MinimalHero = () => {
 
             {/* Simple Buttons */}
             <div className="flex flex-wrap gap-4">
-              <Link href="/live">
+              <Link href="/game/live">
                 <motion.button
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
@@ -62,7 +62,7 @@ export const MinimalHero = () => {
                 </motion.button>
               </Link>
 
-              <Link href="/admin">
+              <Link href="/game/admin/login">
                 <motion.button
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}

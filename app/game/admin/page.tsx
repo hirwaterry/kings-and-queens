@@ -1,12 +1,20 @@
 "use client";
 
+// ─────────────────────────────────────────────────────────────────────────────
+// app/admin/page.tsx  —  FOW Admin Mode
+// Add participants, generate pairs, see Agatambyi
+// Uses fowEngine.ts for all logic + localStorage for persistence
+// ─────────────────────────────────────────────────────────────────────────────
+
 import { useState, useEffect, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Crown, Sword, Plus, Trash2, Zap, Star,
   Users, RefreshCw, ChevronDown, ChevronUp,
   AlertCircle, CheckCircle, Copy, Download,
 } from "lucide-react";
+import { isAdminAuthed } from "@/hooks/useAdmin";
 
 // Import from fowEngine — adjust path to match your project
 import {
@@ -167,6 +175,7 @@ const AgatambyiCard = ({ p }: { p: Participant }) => (
 
 // ─── Main Admin Page ──────────────────────────────────────────────────────────
 export default function AdminPage() {
+  const router = useRouter();
   const [store,     setStore    ] = useState<FOWStore | null>(null);
   const [name,      setName     ] = useState("");
   const [role,      setRole     ] = useState<Role>("king");
@@ -176,6 +185,11 @@ export default function AdminPage() {
   const [bulkText,  setBulkText ] = useState("");
   const [showPairs, setShowPairs] = useState(true);
   const nameRef = useRef<HTMLInputElement>(null);
+
+  // ── Admin auth guard ──────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!isAdminAuthed()) router.replace("/admin/login");
+  }, [router]);
 
   // ── Load / init store ─────────────────────────────────────────────────────
   useEffect(() => {
