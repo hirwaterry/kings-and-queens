@@ -382,7 +382,14 @@ export default function ChallengePage() {
     loadAnswers(challengeId);
   };
 
-  const latestPair = myPairs[myPairs.length-1] ?? null;
+  const latestPair = myPairs.length > 0
+    ? myPairs.reduce((best, p) => {
+        // Pick the pair from the session with the highest week_number
+        const bestSess = allSessions.find(s => s.id === best.session_id);
+        const thisSess = allSessions.find(s => s.id === p.session_id);
+        return (thisSess?.week_number ?? 0) > (bestSess?.week_number ?? 0) ? p : best;
+      })
+    : null;
   const meta = TOPIC_META[topic] ?? TOPIC_META["Icebreaker"];
   const pickRandom = () => {
     const pool = TOPIC_QUESTIONS[topic] ?? [];
@@ -579,15 +586,18 @@ export default function ChallengePage() {
                 <motion.div key={c.id} layout initial={{ opacity:0, y:8 }} animate={{ opacity:1, y:0 }}
                   transition={{ delay:i*0.04 }} className="rounded-2xl overflow-hidden">
 
-                  <div className={`flex items-center gap-3 p-3.5 border transition-all
+                  <div className={`flex items-start gap-3 p-3.5 border transition-all
                                    ${isOpen?"border-violet-500/30 bg-violet-500/10":"border-white/8 bg-white/5"}`}>
-                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-lg shrink-0 border ${topicM.bg}`}>
+                    <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-lg shrink-0 border mt-0.5 ${topicM.bg}`}>
                       {topicM.emoji}
                     </div>
 
                     <div className="flex-1 min-w-0 cursor-pointer" onClick={()=>handleExpand(c.id)}>
-                      <p className="text-white font-semibold text-sm truncate">{c.question}</p>
-                      <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                      {/* Full question — not truncated */}
+                      <p className={`text-white font-semibold text-sm leading-snug ${isOpen ? "" : "line-clamp-2"}`}>
+                        {c.question}
+                      </p>
+                      <div className="flex items-center gap-2 mt-1.5 flex-wrap">
                         <span className="text-[9px] text-white/25 font-mono">Wk {c.week_number}</span>
                         {sessLabel && <span className="text-[8px] text-white/15 font-mono">{sessLabel.date}</span>}
                         <span className={`text-[8px] font-mono px-1.5 py-0.5 rounded-full border
@@ -615,7 +625,7 @@ export default function ChallengePage() {
                         </motion.button>
                       </div>
                     )}
-                    <motion.button whileTap={{ scale:0.85 }} onClick={()=>handleExpand(c.id)}>
+                    <motion.button whileTap={{ scale:0.85 }} onClick={()=>handleExpand(c.id)} className="shrink-0 mt-0.5">
                       {isOpen?<ChevronUp className="w-4 h-4 text-white/30"/>:<ChevronDown className="w-4 h-4 text-white/30"/>}
                     </motion.button>
                   </div>
@@ -643,11 +653,15 @@ export default function ChallengePage() {
                       <motion.div initial={{ opacity:0, height:0 }} animate={{ opacity:1, height:"auto" }}
                         exit={{ opacity:0, height:0 }} transition={{ duration:0.2 }} className="overflow-hidden">
                         <div className="p-4 border-x border-b border-violet-500/20 bg-violet-500/5 flex flex-col gap-3">
-                          {!isAdmin && c.status==="open" && (
-                            <PlayerChallengeCard challenge={c} myPair={latestPair}
-                              hasSubmitted={submittedIds.has(c.id)} onSubmit={handleSubmitAnswer}
-                              onNeedProfile={()=>router.push("/game/profile")}/>
-                          )}
+                          {!isAdmin && c.status==="open" && (() => {
+                            // Use the pair from THIS challenge's session — not the latest pair
+                            const challengePair = myPairs.find(p => p.session_id === c.session_id) ?? null;
+                            return (
+                              <PlayerChallengeCard challenge={c} myPair={challengePair}
+                                hasSubmitted={submittedIds.has(c.id)} onSubmit={handleSubmitAnswer}
+                                onNeedProfile={()=>router.push("/game/profile")}/>
+                            );
+                          })()}
                           {!isAdmin && c.status!=="open" && (
                             <p className="text-white/30 text-xs font-mono text-center py-3">
                               {c.status==="judging"?"Host is scoring answers...":"This challenge is closed."}

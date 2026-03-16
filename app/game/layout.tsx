@@ -11,6 +11,8 @@ import {
   Dices, Radio, Gift, ChevronLeft, Target,
   Settings, LogOut, UserCircle, Edit3,
   Brain,
+  House,
+  GitMerge,
 } from "lucide-react";
 import { supabase, getRankTier, type DBPlayerProfile } from "@/lib/supabase";
 import { isAdminAuthed, adminLogout } from "@/hooks/useAdmin";
@@ -25,6 +27,7 @@ const PLAYER_NAV = [
   {
     label: "GAMES",
     items: [
+      { href:"/game/",    icon:House,   label:"Dashboard",         badge:"NEW",  badgeColor:"bg-[#34d399] text-black",      glow:"#f97316" },
       { href:"/game/live",      icon:Radio,   label:"Live Pair",        badge:"LIVE",  badgeColor:"bg-red-500 text-white",          glow:"#ef4444" },
       { href:"/game/challenge", icon:Target,  label:"Weekly Challenge", badge:null,    badgeColor:"",                                glow:"#8b5cf6" },
       { href:"/game/quiz",      icon:Brain,   label:"Quiz",             badge:"NEW",    badgeColor:"bg-[#34d399] text-black",        glow:"#facc15" },
@@ -60,6 +63,7 @@ const ADMIN_NAV = [
       { href:"/game/admin/sessions",   icon:Settings, label:"Sessions",   badge:null, badgeColor:"", glow:"#94a3b8" },
       { href:"/game/admin/door",       icon:Gift,     label:"Secret",    badge:"Premium", badgeColor:"bg-green-500", glow:"#f43f5e" },
       { href:"/game/admin/live", icon:Crown, label:"Host Session", badge:null, badgeColor:"", glow:"#ef4444" },
+      { href:"/game/admin/merge", icon:GitMerge, label:"Merge Players", badge:null, badgeColor:"", glow:"#f97316" },
     ],
   },
 ];
@@ -146,13 +150,14 @@ const Sidebar = ({
   const pathname = usePathname();
   const rank     = profile ? getRankTier(profile.total_xp) : null;
 
-  // Read localStorage only on client — avoids SSR crash
+  // Re-derive seed whenever profile loads (async) or changes
   const [seed,        setSeed       ] = useState("guest");
   const [avatarStyle, setAvatarStyle] = useState("adventurer");
   useEffect(() => {
-    setSeed(profile?.display_name ?? localStorage.getItem("fow_my_name") ?? "guest");
+    const stored = localStorage.getItem("fow_my_name") ?? "";
+    setSeed((profile?.display_name ?? stored) || "guest");
     setAvatarStyle(localStorage.getItem("fow_avatar_style") ?? "adventurer");
-  }, [profile]);
+  }, [profile]); // <-- profile in deps: re-runs when DB fetch resolves
 
   const allSections = isAdmin ? [...PLAYER_NAV, ...ADMIN_NAV] : PLAYER_NAV;
 
@@ -302,13 +307,14 @@ const TopBar = ({ onMenuClick, profile }: { onMenuClick:()=>void; profile:DBPlay
   const allItems = [...PLAYER_NAV, ...ADMIN_NAV].flatMap(s => s.items);
   const pageName = allItems.find(i => i.href === pathname)?.label ?? "Dashboard";
 
-  // Read localStorage only on client
+  // Re-derive seed whenever profile loads
   const [seed,        setSeed       ] = useState("guest");
   const [avatarStyle, setAvatarStyle] = useState("adventurer");
   useEffect(() => {
-    setSeed(profile?.display_name ?? localStorage.getItem("fow_my_name") ?? "guest");
+    const stored = localStorage.getItem("fow_my_name") ?? "";
+    setSeed((profile?.display_name ?? stored) || "guest");
     setAvatarStyle(localStorage.getItem("fow_avatar_style") ?? "adventurer");
-  }, [profile]);
+  }, [profile]); // profile in deps
 
   return (
     <header className="h-12 backdrop-blur-md border-b border-white/8 flex items-center px-4 gap-3
@@ -364,18 +370,34 @@ export const GameLayout = ({ children }: { children: React.ReactNode }) => {
   useEffect(() => {
     setIsAdmin(isAdminAuthed());
 
+    const fetchProfile = () => {
+      const name = localStorage.getItem("fow_my_name");
+      if (!name) return;
+      supabase.from("player_profiles").select("*").eq("name", name.toLowerCase()).maybeSingle()
+        .then(({ data }) => { if (data) setProfile(data); });
+    };
+
+    fetchProfile();
+
+    // Re-fetch when localStorage changes (e.g. player sets their name on live page)
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === "fow_my_name") fetchProfile();
+    };
+    window.addEventListener("storage", onStorage);
+
     const name = localStorage.getItem("fow_my_name");
-    if (!name) return;
-    supabase.from("player_profiles").select("*").eq("name", name.toLowerCase()).maybeSingle()
-      .then(({ data }) => { if (data) setProfile(data); });
+    if (!name) return () => window.removeEventListener("storage", onStorage);
 
     const ch = supabase.channel("layout-profile")
       .on("postgres_changes", {
-        event:"UPDATE", schema:"public", table:"player_profiles",
-        filter:`name=eq.${name.toLowerCase()}`,
+        event: "UPDATE", schema: "public", table: "player_profiles",
+        filter: `name=eq.${name.toLowerCase()}`,
       }, ({ new: u }) => setProfile(u as DBPlayerProfile))
       .subscribe();
-    return () => { supabase.removeChannel(ch); };
+    return () => {
+      supabase.removeChannel(ch);
+      window.removeEventListener("storage", onStorage);
+    };
   }, []);
 
   return (
