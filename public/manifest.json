@@ -1,0 +1,57 @@
+{
+    "name": "Friend of a Week",
+    "short_name": "FOW",
+    "description": "Royal pairing app with 21-Day Faith Challenge",
+    "start_url": "/game/",
+    "display": "standalone",
+    "background_color": "#0d0d10",
+    "theme_color": "#0d0d10",
+    "orientation": "portrait-primary",
+    "scope": "/",
+    "lang": "en",
+    "categories": ["lifestyle", "social", "entertainment"],
+    "icons": [
+      {
+        "src": "/icons/favicon-96x96.png",
+        "sizes": "96x96",
+        "type": "image/png",
+        "purpose": "maskable any"
+      },
+      {
+        "src": "/icons/web-app-manifest-192x192.png",
+        "sizes": "192x192",
+        "type": "image/png",
+        "purpose": "maskable any"
+      },
+      {
+        "src": "/icons/web-app-manifest-512x512.png",
+        "sizes": "512x512",
+        "type": "image/png",
+        "purpose": "maskable any"
+      }
+    ],
+    "shortcuts": [
+      {
+        "name": "21-Day Challenge",
+        "short_name": "Challenge",
+        "description": "Track your daily faith challenge",
+        "url": "/game/challenge21",
+        "icons": [{ "src": "/icons/favicon-96x96.png", "sizes": "96x96" }]
+      },
+      {
+        "name": "Live Pairs",
+        "short_name": "Live",
+        "description": "Join this week's pairing session",
+        "url": "/game/live",
+        "icons": [{ "src": "/icons/favicon-96x96.png", "sizes": "96x96" }]
+      },
+      {
+        "name": "Leaderboard",
+        "short_name": "Ranks",
+        "description": "See the Royal Legends",
+        "url": "/game/leaderboard",
+        "icons": [{ "src": "/icons/favicon-96x96.png", "sizes": "96x96" }]
+      }
+    ],
+    "prefer_related_applications": false
+  }

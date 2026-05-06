@@ -27,11 +27,11 @@ const PLAYER_NAV = [
   {
     label: "GAMES",
     items: [
-      { href:"/game/",    icon:House,   label:"Dashboard",         badge:"NEW",  badgeColor:"bg-[#34d399] text-black",      glow:"#f97316" },
+      { href:"/game/",    icon:House,   label:"Dashboard",         badge:null,  badgeColor:"bg-[#34d399] text-black",      glow:"#f97316" },
       { href:"/game/live",      icon:Radio,   label:"Live Pair",        badge:"LIVE",  badgeColor:"bg-red-500 text-white",          glow:"#ef4444" },
       { href:"/game/challenge", icon:Target,  label:"Weekly Challenge", badge:null,    badgeColor:"",                                glow:"#8b5cf6" },
-      { href:"/game/quiz",      icon:Brain,   label:"Quiz",             badge:"NEW",    badgeColor:"bg-[#34d399] text-black",        glow:"#facc15" },
-      { href:"/game/spin",      icon:Dices,   label:"Royal Spin",       badge:"SOON",  badgeColor:"bg-white/10 text-white/35",      glow:"#facc15" },
+      { href:"/game/quiz",      icon:Brain,   label:"Quiz",             badge:null,    badgeColor:"bg-[#34d399] text-black",        glow:"#facc15" },
+      { href:"/game/challenge/21days",      icon:Dices,   label:"21 Days",       badge:"NEW",  badgeColor:"bg-[#34d399] text-black",      glow:"#facc15" },
       { href:"/game/battle",    icon:Flame,   label:"War Mode",         badge:"SOON",  badgeColor:"bg-white/10 text-white/35",      glow:"#f97316" },
 
     ],
@@ -61,7 +61,7 @@ const ADMIN_NAV = [
       { href:"/game/admin",            icon:Sword,    label:"Add List",   badge:null, badgeColor:"", glow:"#f59e0b" },
       { href:"/game/admin/edit", icon:Edit3,    label:"Edit Pairs", badge:null, badgeColor:"", glow:"#f97316" },
       { href:"/game/admin/sessions",   icon:Settings, label:"Sessions",   badge:null, badgeColor:"", glow:"#94a3b8" },
-      { href:"/game/admin/door",       icon:Gift,     label:"Secret",    badge:"Premium", badgeColor:"bg-green-500", glow:"#f43f5e" },
+      // { href:"/game/admin/door",       icon:Gift,     label:"Secret",    badge:"Premium", badgeColor:"bg-green-500", glow:"#f43f5e" },
       { href:"/game/admin/live", icon:Crown, label:"Host Session", badge:null, badgeColor:"", glow:"#ef4444" },
       { href:"/game/admin/merge", icon:GitMerge, label:"Merge Players", badge:null, badgeColor:"", glow:"#f97316" },
     ],

@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Dark background with rounded corners for maskable -->
+  <rect width="512" height="512" fill="#0d0d10" rx="80"/>
+  
+  <!-- Outer glow -->
+  <circle cx="256" cy="240" r="185" fill="none" stroke="#ef4444" stroke-width="2" opacity="0.3"/>
+  
+  <!-- Inner ring -->
+  <circle cx="256" cy="240" r="160" fill="none" stroke="#ef4444" stroke-width="5" opacity="0.7"/>
+  
+  <!-- Inner circle bg -->
+  <circle cx="256" cy="240" r="150" fill="#130808"/>
+  
+  <!-- Crown shape -->
+  <path d="M 128 320 L 128 175 L 192 218 L 256 120 L 320 218 L 384 175 L 384 320 Z"
+        fill="#ef4444"/>
+  
+  <!-- Crown base bar -->
+  <rect x="118" y="318" width="276" height="62" rx="10" fill="#ef4444"/>
+  
+  <!-- Jewel left -->
+  <circle cx="128" cy="175" r="18" fill="#fbbf24"/>
+  <circle cx="128" cy="175" r="10" fill="#fef3c7"/>
+  
+  <!-- Jewel center -->
+  <circle cx="256" cy="120" r="22" fill="#fbbf24"/>
+  <circle cx="256" cy="120" r="12" fill="#fef3c7"/>
+  
+  <!-- Jewel right -->
+  <circle cx="384" cy="175" r="18" fill="#fbbf24"/>
+  <circle cx="384" cy="175" r="10" fill="#fef3c7"/>
+  
+  <!-- F O W text bottom -->
+  <text x="256" y="440" 
+        font-family="system-ui, -apple-system, sans-serif" 
+        font-size="42" 
+        font-weight="900" 
+        fill="rgba(255,255,255,0.18)" 
+        text-anchor="middle"
+        letter-spacing="12">FOW</text>
+        
+  <!-- Red dot accent -->
+  <circle cx="256" cy="256" r="8" fill="#ef4444" opacity="0.4"/>
+</svg>
