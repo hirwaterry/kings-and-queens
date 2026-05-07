@@ -79,27 +79,27 @@ const SURPRISE_POOL = [
 ];
 
 const SONG_SUGGESTIONS = [
-  { song: "Way Maker",          artist: "Sinach"              },
-  { song: "Jireh",              artist: "Elevation Worship"   },
-  { song: "Goodness of God",    artist: "CeCe Winans"         },
-  { song: "Yes and Amen",       artist: "Housefires"          },
-  { song: "This Is Me Trying",  artist: "Maverick City Music" },
-  { song: "Fear Is Not My Future", artist: "Kirk Franklin"    },
-  { song: "God Really Loves Us",artist: "Crowder"             },
-  { song: "Battle Belongs",     artist: "Phil Wickham"        },
-  { song: "Promises",           artist: "Maverick City Music" },
-  { song: "Firm Foundation",    artist: "Cody Carnes"         },
-  { song: "Holy Forever",       artist: "Brian Johnson"       },
-  { song: "Canvas and Clay",    artist: "Pat Barrett"         },
-  { song: "Build My Life",      artist: "Housefires"          },
-  { song: "Another One",        artist: "Bethel Music"        },
-  { song: "Great Are You Lord", artist: "All Sons & Daughters"},
-  { song: "Raise a Hallelujah", artist: "Bethel Music"        },
-  { song: "Graves Into Gardens","artist": "Elevation Worship" },
-  { song: "King of Kings",      artist: "Hillsong Worship"    },
-  { song: "Living Hope",        artist: "Phil Wickham"        },
-  { song: "What a Beautiful Name", artist: "Hillsong Worship" },
-  { song: "Same God",           artist: "Elevation Worship"   },
+  { song: "Way Maker",          artist: "Sinach"              ,   url: "https://youtu.be/hORfMfddEnY?list=RDhORfMfddEnY"},
+  { song: "Jireh",              artist: "Elevation Worship"   ,   url: "https://youtu.be/hORfMfddEnY?list=RDhORfMfddEnY"},
+  { song: "Goodness of God",    artist: "CeCe Winans"         ,   url: "https://youtu.be/hORfMfddEnY?list=RDhORfMfddEnY"},
+  { song: "Yes and Amen",       artist: "Housefires"          ,   url: "https://youtu.be/hORfMfddEnY?list=RDhORfMfddEnY"},
+  { song: "This Is Me Trying",  artist: "Maverick City Music" ,   url: "https://youtu.be/hORfMfddEnY?list=RDhORfMfddEnY"},
+  { song: "Fear Is Not My Future", artist: "Kirk Franklin"    ,   url: "https://youtu.be/hORfMfddEnY?list=RDhORfMfddEnY"},
+  { song: "God Really Loves Us",artist: "Crowder"             ,   url: "https://youtu.be/hORfMfddEnY?list=RDhORfMfddEnY"},
+  { song: "Battle Belongs",     artist: "Phil Wickham"        ,   url: "https://youtu.be/hORfMfddEnY?list=RDhORfMfddEnY"},
+  { song: "Promises",           artist: "Maverick City Music" ,   url: "https://youtu.be/hORfMfddEnY?list=RDhORfMfddEnY"},
+  { song: "Firm Foundation",    artist: "Cody Carnes"         ,   url: "https://youtu.be/hORfMfddEnY?list=RDhORfMfddEnY"},
+  { song: "Holy Forever",       artist: "Brian Johnson"       ,   url: "https://youtu.be/hORfMfddEnY?list=RDhORfMfddEnY"},
+  { song: "Canvas and Clay",    artist: "Pat Barrett"         ,   url: "https://youtu.be/hORfMfddEnY?list=RDhORfMfddEnY"},
+  { song: "Build My Life",      artist: "Housefires"          ,   url: "https://youtu.be/hORfMfddEnY?list=RDhORfMfddEnY"},
+  { song: "Another One",        artist: "Bethel Music"        ,   url: "https://youtu.be/hORfMfddEnY?list=RDhORfMfddEnY"},
+  { song: "Great Are You Lord", artist: "All Sons & Daughters",   url: "https://youtu.be/hORfMfddEnY?list=RDhORfMfddEnY"},
+  { song: "Raise a Hallelujah", artist: "Bethel Music"        ,   url: "https://youtu.be/hORfMfddEnY?list=RDhORfMfddEnY"},
+  { song: "Graves Into Gardens","artist": "Elevation Worship" ,   url: "https://youtu.be/hORfMfddEnY?list=RDhORfMfddEnY"},
+  { song: "King of Kings",      artist: "Hillsong Worship"    ,   url: "https://youtu.be/hORfMfddEnY?list=RDhORfMfddEnY"},
+  { song: "Living Hope",        artist: "Phil Wickham"        ,   url: "https://youtu.be/hORfMfddEnY?list=RDhORfMfddEnY"},
+  { song: "What a Beautiful Name", artist: "Hillsong Worship" ,   url: "https://youtu.be/hORfMfddEnY?list=RDhORfMfddEnY"},
+  { song: "Same God",           artist: "Elevation Worship"   ,   url: "https://youtu.be/hORfMfddEnY?list=RDhORfMfddEnY"},
 ];
 
 function todaySuggestion() {
@@ -154,7 +154,6 @@ function pickSurprise() {
   return SURPRISE_POOL[Math.floor(Math.random() * SURPRISE_POOL.length)];
 }
 
-// ── Sub-components ────────────────────────────────────────────────────────────
 
 // ─────────────────────────────────────────────────────────────────────────────
 // YOUTUBE MINI PLAYER
@@ -168,7 +167,7 @@ interface YTPlayer {
 }
 declare global { interface Window { YT: any; onYouTubeIframeAPIReady: () => void; } }
 
-const YoutubePlayer = ({ song, artist }: { song: string; artist: string }) => {
+const YoutubePlayer = ({ song, artist, url }: { song: string; artist: string; url?: string }) => {
   const containerRef  = useRef<HTMLDivElement>(null);
   const playerRef     = useRef<YTPlayer | null>(null);
   const [isPlaying,   setIsPlaying  ] = useState(false);
@@ -177,30 +176,43 @@ const YoutubePlayer = ({ song, artist }: { song: string; artist: string }) => {
   const [error,       setError      ] = useState(false);
   const [searchDone,  setSearchDone ] = useState(false);
 
-  // Search YouTube via oEmbed trick (no API key needed for search)
-  // We construct a search URL and use the IFrame directly
+  // Extract video ID from YouTube URL
+  const extractVideoId = (url: string): string | null => {
+    const regex = /(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&?#]+)/;
+    const match = url.match(regex);
+    return match ? match[1] : null;
+  };
+
+  // Get video ID from URL or fallback to search
   const getVideoId = useCallback(async () => {
     setIsLoading(true);
     setError(false);
     try {
-      // Use YouTube's search embed — search query becomes the video
-      // This works by using nocookie embed with playlist=&listType=search
-      const query = encodeURIComponent(`${song} ${artist} official`);
-      // We'll use a direct iframe search approach
-      const searchQuery = `${song} ${artist}`;
-      setVideoId(searchQuery); // store as search query, use in iframe src
+      if (url) {
+        const extractedId = extractVideoId(url);
+        if (extractedId) {
+          setVideoId(extractedId);
+          setSearchDone(true);
+          setIsLoading(false);
+          return;
+        }
+      }
+      // Fallback to search if no URL provided
+      setVideoId(`${song} ${artist}`);
       setSearchDone(true);
     } catch {
       setError(true);
     } finally {
       setIsLoading(false);
     }
-  }, [song, artist]);
+  }, [song, artist, url]);
 
   useEffect(() => { getVideoId(); }, [getVideoId]);
 
   const searchUrl = videoId
-    ? `https://www.youtube-nocookie.com/embed?listType=search&list=${encodeURIComponent(videoId!)}&autoplay=0&rel=0&modestbranding=1&color=white`
+    ? url && extractVideoId(url)
+      ? `https://www.youtube-nocookie.com/embed/${extractVideoId(url)}?autoplay=0&rel=0&modestbranding=1&color=white`
+      : `https://www.youtube-nocookie.com/embed?listType=search&list=${encodeURIComponent(videoId)}&autoplay=0&rel=0&modestbranding=1&color=white`
     : null;
 
   return (
@@ -215,7 +227,7 @@ const YoutubePlayer = ({ song, artist }: { song: string; artist: string }) => {
           <p className="text-white/40 text-[9px] font-mono truncate">{artist}</p>
         </div>
         <a
-          href={`https://www.youtube.com/results?search_query=${encodeURIComponent(song + " " + artist)}`}
+          href={url || `https://www.youtube.com/results?search_query=${encodeURIComponent(song + " " + artist)}`}
           target="_blank" rel="noopener noreferrer"
           className="w-7 h-7 rounded-lg bg-white/8 flex items-center justify-center hover:bg-white/15 transition-colors"
           title="Open in YouTube"
@@ -1634,9 +1646,9 @@ export default function Challenge21Page() {
         </div>
         <p className="text-white font-black text-xl mb-2">Set your name first</p>
         <p className="text-white/30 text-sm mb-5">You need a name to track your challenge.</p>
-        <motion.button whileTap={{ scale: 0.97 }} onClick={() => router.push("/game/live")}
+        <motion.button whileTap={{ scale: 0.97 }} onClick={() => router.push("/game/profile")}
           className="px-6 py-3 bg-violet-500/20 border border-violet-500/30 rounded-2xl text-violet-300 font-bold">
-          Go to Join Page →
+          Go to Profile →
         </motion.button>
       </div>
     </div>
