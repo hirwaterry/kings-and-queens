@@ -62,7 +62,7 @@ export const MinimalHero = () => {
                 </motion.button>
               </Link>
 
-              <Link href="/game/admin/login">
+              <Link href="/game/">
                 <motion.button
                   whileHover={{ scale: 1.02 }}
                   whileTap={{ scale: 0.98 }}
@@ -71,7 +71,7 @@ export const MinimalHero = () => {
                            transition-all flex items-center gap-2"
                 >
                   <Users className="w-5 h-5" />
-                  Add List
+                  Go to Dashboard
                 </motion.button>
               </Link>
             </div>

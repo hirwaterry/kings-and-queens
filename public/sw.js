@@ -6,7 +6,7 @@ const ICON_96    = "/icons/favicon-96x96.png";
 
 const STATIC_ASSETS = [
   "/game/",
-  "/game/challenge21",
+  "/game/21days",
   "/game/live",
   "/game/leaderboard",
   ICON_192,
@@ -54,7 +54,7 @@ self.addEventListener("push", (event) => {
     title: "Friend of a Week 👑",
     body: "Your daily challenge is waiting for you!",
     type: "challenge_reminder",
-    url: "/game/challenge21",
+    url: "/game/21days",
   };
   try { data = { ...data, ...event.data.json() }; } catch (_) {}
 
@@ -91,7 +91,7 @@ self.addEventListener("notificationclick", (event) => {
           body: "Your 21-Day Challenge is waiting. Just 5 minutes!",
           icon: ICON_192,
           badge: ICON_96,
-          data: { url: "/game/challenge21" },
+          data: { url: "/game/21days" },
           actions: [{ action: "log_now", title: "Log Now" }],
         });
         resolve(undefined);
@@ -100,7 +100,7 @@ self.addEventListener("notificationclick", (event) => {
     return;
   }
 
-  const target = url || "/game/challenge21";
+  const target = url || "/game/21days";
   event.waitUntil(
     clients.matchAll({ type: "window", includeUncontrolled: true }).then((cls) => {
       const existing = cls.find((c) => c.url.includes(target));
